@@ -1,0 +1,2 @@
+# PluginCotaOpencode
+plugin
