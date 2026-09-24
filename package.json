@@ -1,0 +1,16 @@
+{
+  "name": "openusage",
+  "version": "0.1.0",
+  "description": "Floating Windows widget: Claude, Codex, Cursor and OpenCode Go usage limits",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "probe": "node --experimental-strip-types scripts/probe.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9.0"
+  }
+}
