@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -12,11 +13,31 @@ const WINDOWS: ReadonlyArray<readonly [key: string, label: string]> = [
 
 const configDir = () => process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
 
+/** On macOS Claude Code keeps its login in the Keychain rather than in .credentials.json. */
+function readKeychain(): Promise<string> {
+  return new Promise((resolve, reject) =>
+    execFile(
+      "/usr/bin/security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { timeout: 10_000 },
+      (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
+    ),
+  )
+}
+
+async function readCredentials(): Promise<string> {
+  try {
+    return await readFile(join(configDir(), ".credentials.json"), "utf8")
+  } catch {
+    if (process.platform === "darwin") return readKeychain()
+    throw new Error("no credentials file")
+  }
+}
+
 async function readToken() {
-  const dir = configDir()
   let raw: string
   try {
-    raw = await readFile(join(dir, ".credentials.json"), "utf8")
+    raw = await readCredentials()
   } catch {
     throw new ProviderError("not signed in to Claude Code")
   }

@@ -1,0 +1,21 @@
+name: macOS build
+
+on:
+  push:
+    paths: ["widget-mac/**", "src/**", "scripts/**", ".github/workflows/macos.yml"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run typecheck
+      - run: widget-mac/build.sh "$RUNNER_TEMP/OpenUsage.app"
+      - run: test -x "$RUNNER_TEMP/OpenUsage.app/Contents/MacOS/OpenUsage"
+      # Every provider should come back as JSON, even if only with a "not signed in" error.
+      - run: node --experimental-strip-types --no-warnings scripts/usage-json.ts | node -e "const a=JSON.parse(require('fs').readFileSync(0,'utf8'));if(a.length!==4)process.exit(1);console.log(a.map(u=>u.id+': '+(u.error??'ok')).join('\n'))"

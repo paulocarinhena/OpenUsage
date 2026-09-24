@@ -8,9 +8,11 @@
 
 Claude · Codex · Cursor · OpenCode Go
 
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#-instructions-for-ai-agents)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#windows)
+[![macOS](https://img.shields.io/badge/macOS-12%2B-000000?logo=apple&logoColor=white)](#macos)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.6-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![PowerShell](https://img.shields.io/badge/UI-PowerShell%20%2B%20WPF-5391FE?logo=powershell&logoColor=white)](widget/usage-widget.ps1)
+[![Swift](https://img.shields.io/badge/UI-Swift%20%2B%20SwiftUI-F05138?logo=swift&logoColor=white)](widget-mac/OpenUsage.swift)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-E8953F)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/pcarinhena)
 
@@ -29,9 +31,10 @@ Claude · Codex · Cursor · OpenCode Go
 - **Color warnings:** bars turn **orange at 50%** and **red at 80%**.
 - **Used / Left toggle:** show how much you have used or how much is left.
 - **Plan and credits:** plan badge (PRO, PLUS, MAX…), credit balance, on-demand and bonus spend.
-- **Stays out of the way:** always-on-top, draggable, lives in the tray and follows the Windows light/dark theme.
+- **Stays out of the way:** always-on-top, draggable, lives in the tray (Windows) or menu bar (macOS) and follows the system light/dark theme.
 - **Auto refresh** every 5 minutes. The last good numbers are cached, so they survive restarts and rate limits.
 - **Zero setup:** it reads the logins your tools already have. No API keys, no `npm install`.
+- **Windows and macOS.**
 
 ### 🚀 Quick install
 
@@ -53,9 +56,13 @@ It will follow the [instructions below](#-instructions-for-ai-agents).
 
 > If someone asked you to "install", "download" or "open" this plugin/widget, follow the steps below exactly. **Do not ask the user questions:** every step has a default.
 
+> Check the operating system first: on **Windows** follow the steps right below; on **macOS** skip to [macOS](#macos).
+
+### Windows
+
 **Requirements:** Windows 10/11, PowerShell, Node.js >= 22.6 on `PATH`. Git is optional.
 
-### Step 1: make sure Node.js >= 22.6 is available
+#### Step 1: make sure Node.js >= 22.6 is available
 
 ```powershell
 node -v
@@ -69,7 +76,7 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Env
 node -v
 ```
 
-### Step 2: download (or update) into `%LOCALAPPDATA%\OpenUsage`
+#### Step 2: download (or update) into `%LOCALAPPDATA%\OpenUsage`
 
 Always use this folder. The "Start with Windows" option creates a shortcut pointing into it, so it must not be a temporary location.
 
@@ -90,7 +97,7 @@ if (Test-Path (Join-Path $dir '.git')) {
 }
 ```
 
-### Step 3: create the desktop shortcut
+#### Step 3: create the desktop shortcut
 
 ```powershell
 $dir = Join-Path $env:LOCALAPPDATA 'OpenUsage'
@@ -104,7 +111,7 @@ $lnk.Save()
 
 This puts an **OpenUsage** icon on the desktop. Running it again just overwrites the same shortcut.
 
-### Step 4: open the widget
+#### Step 4: open the widget
 
 ```powershell
 Start-Process wscript.exe -ArgumentList "`"$env:LOCALAPPDATA\OpenUsage\widget\usage-widget.vbs`""
@@ -112,7 +119,7 @@ Start-Process wscript.exe -ArgumentList "`"$env:LOCALAPPDATA\OpenUsage\widget\us
 
 The widget opens without a console window. Only one instance runs at a time: if it is already open, this just brings it back into view.
 
-### Step 5 (optional): verify
+#### Step 5 (optional): verify
 
 To confirm data is coming through, run the probe and show the output to the user:
 
@@ -123,7 +130,7 @@ node --experimental-strip-types --no-warnings scripts/probe.ts
 
 A provider with an `"error"` field is **not an installation failure**: it means the user does not use that tool or is not signed in to it (see [Providers](#-providers)). Tell the user and stop.
 
-### All at once
+#### All at once
 
 ```powershell
 $dir = Join-Path $env:LOCALAPPDATA 'OpenUsage'
@@ -143,9 +150,48 @@ Start-Process wscript.exe -ArgumentList "`"$dir\widget\usage-widget.vbs`""
 
 (If Git is not installed, use the Step 2 block, which downloads the ZIP.)
 
+### macOS
+
+**Requirements:** macOS 12+, Node.js >= 22.6, Xcode Command Line Tools (they provide `git` and `swiftc`; the app is compiled on the Mac, so there is no unsigned download for Gatekeeper to block).
+
+#### Step 1: make sure the tools are there
+
+```bash
+xcode-select -p >/dev/null 2>&1 || xcode-select --install   # opens Apple's installer; wait for it to finish
+node -v
+```
+
+If `node` is missing or older than `v22.6.0`, install it with Homebrew (`brew install node`) or from [nodejs.org](https://nodejs.org).
+
+#### Step 2: download (or update), build and open
+
+Always use `~/Library/Application Support/OpenUsage`: the app reads the scripts from there.
+
+```bash
+dir="$HOME/Library/Application Support/OpenUsage"
+if [ -d "$dir/.git" ]; then git -C "$dir" pull --ff-only; else git clone https://github.com/paulocarinhena/OpenUsage.git "$dir"; fi
+"$dir/widget-mac/build.sh"
+open "$HOME/Applications/OpenUsage.app"
+```
+
+`build.sh` compiles the widget into `~/Applications/OpenUsage.app` (findable in Spotlight and Launchpad). Run it again after every update.
+
+The first time the Claude provider runs, macOS may ask whether `security` can read the **Claude Code-credentials** Keychain item: that is where Claude Code keeps its login on macOS. Click **Always Allow**.
+
+#### Step 3 (optional): verify
+
+```bash
+cd "$HOME/Library/Application Support/OpenUsage"
+node --experimental-strip-types --no-warnings scripts/probe.ts
+```
+
+As on Windows, a provider with an `"error"` field only means the user does not use that tool or is not signed in.
+
 ---
 
 ## 🖱️ Usage
+
+### On Windows
 
 Double-click `widget/usage-widget.vbs`.
 
@@ -155,6 +201,14 @@ Double-click `widget/usage-widget.vbs`.
 - **Start with Windows:** creates a shortcut in `shell:startup` that opens the widget at login.
 - **Desktop shortcut:** adds or removes the desktop icon.
 
+### On macOS
+
+Open **OpenUsage** from Spotlight, Launchpad or `~/Applications`.
+
+- **Menu bar icon:** Show / hide, Refresh, Always on top, Start at login and Quit.
+- **Drag the header** to move the widget; it remembers where you left it.
+- **Start at login:** adds a LaunchAgent (`~/Library/LaunchAgents/com.openusage.widget.plist`) that opens the app at login.
+
 To see the raw data in a terminal: `npm run probe` (or `npm run probe -- claude cursor` to pick providers).
 
 ## 🔌 Providers
@@ -163,15 +217,22 @@ The widget only **reads** credentials the tools themselves already saved on your
 
 | Provider | Reads from | If it shows an error |
 |---|---|---|
-| Claude | `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`) | Open Claude Code and sign in. Token expired: open Claude Code once to renew it. |
+| Claude | `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`); on macOS, the Keychain item Claude Code saves | Open Claude Code and sign in. Token expired: open Claude Code once to renew it. |
 | Codex | `~/.codex/auth.json` (or `CODEX_HOME`); offline, falls back to the latest session log | Sign in to Codex with your ChatGPT account. API-key logins have no plan limits. |
-| Cursor | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` | Open Cursor and sign in. |
+| Cursor | `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, or `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS | Open Cursor and sign in. |
 | OpenCode Go | `OPENCODE_GO_API_KEY`, or the key saved by opencode's `/connect` | Run `/connect` in opencode and pick OpenCode Go. |
 
 ## 🧹 Uninstall
 
+**Windows**
+
 1. Right-click the tray icon, uncheck **Start with Windows** and **Desktop shortcut**, then click **Quit**.
 2. Delete `%LOCALAPPDATA%\OpenUsage` and `%APPDATA%\usage-widget`.
+
+**macOS**
+
+1. In the menu bar icon, uncheck **Start at login**, then click **Quit**.
+2. Delete `~/Applications/OpenUsage.app`, `~/Library/Application Support/OpenUsage` and `~/Library/Application Support/usage-widget`.
 
 ## 🛠️ Development
 
@@ -187,6 +248,7 @@ Layout:
 - `scripts/usage-json.ts`: prints every provider as one JSON array; this is what the widget calls.
 - `widget/usage-widget.ps1`: the WPF UI. The `.vbs` only launches it without a console.
 - `widget/openusage.ico`: the app icon, used by the tray and the shortcuts.
+- `widget-mac/OpenUsage.swift`: the macOS app (AppKit + SwiftUI). `widget-mac/build.sh` compiles it into `OpenUsage.app`.
 
 ## ☕ Support
 

@@ -1,7 +1,7 @@
 {
   "name": "openusage",
   "version": "0.1.0",
-  "description": "Floating Windows widget: Claude, Codex, Cursor and OpenCode Go usage limits",
+  "description": "Floating Windows and macOS widget: Claude, Codex, Cursor and OpenCode Go usage limits",
   "type": "module",
   "private": true,
   "license": "Apache-2.0",
