@@ -202,25 +202,32 @@ func formatAgo(_ ms: Double?) -> String {
 
 // ---- views -----------------------------------------------------------------------
 
+/// View-local state without `@State`: in recent SDKs `@State` is a macro whose plugin only ships with
+/// full Xcode, so it does not compile with the Command Line Tools alone.
+final class LocalState<Value>: ObservableObject {
+  @Published var value: Value
+  init(_ value: Value) { self.value = value }
+}
+
 struct HeaderButton: View {
   let title: String
   let help: String
   let action: () -> Void
-  @State private var hover = false
+  @StateObject private var hover = LocalState(false)
 
   var body: some View {
     Button(action: action) {
       Text(title)
         .font(.system(size: 12))
-        .foregroundColor(hover ? C.text : C.muted)
+        .foregroundColor(hover.value ? C.text : C.muted)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 5).fill(hover ? C.hover : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 5).fill(hover.value ? C.hover : Color.clear))
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .help(help)
-    .onHover { hover = $0 }
+    .onHover { hover.value = $0 }
   }
 }
 
@@ -303,7 +310,7 @@ struct WidgetView: View {
   @ObservedObject var m: Model
   let hide: () -> Void
   // Re-renders the "updated N min ago" label.
-  @State private var now = Date()
+  @StateObject private var now = LocalState(Date())
   private let clock = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
   var body: some View {
@@ -331,7 +338,7 @@ struct WidgetView: View {
         Text(m.lastError).foregroundColor(C.error)
       }
       .font(.system(size: 11.5))
-      .id(now)
+      .id(now.value)
     }
     .font(.system(size: 13))
     .foregroundColor(C.text)
@@ -340,7 +347,7 @@ struct WidgetView: View {
     .fixedSize(horizontal: false, vertical: true)
     .background(RoundedRectangle(cornerRadius: 12).fill(C.bg))
     .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1))
-    .onReceive(clock) { now = $0 }
+    .onReceive(clock) { now.value = $0 }
   }
 }
 
