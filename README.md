@@ -12,6 +12,7 @@ Claude · Codex · Cursor · OpenCode Go
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.6-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![PowerShell](https://img.shields.io/badge/UI-PowerShell%20%2B%20WPF-5391FE?logo=powershell&logoColor=white)](widget/usage-widget.ps1)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-E8953F)](LICENSE)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/pcarinhena)
 
 </div>
 
@@ -186,6 +187,12 @@ Layout:
 - `scripts/usage-json.ts`: prints every provider as one JSON array; this is what the widget calls.
 - `widget/usage-widget.ps1`: the WPF UI. The `.vbs` only launches it without a console.
 - `widget/openusage.ico`: the app icon, used by the tray and the shortcuts.
+
+## ☕ Support
+
+If OpenUsage saves you from hitting a limit mid-task, you can [buy me a coffee](https://buymeacoffee.com/pcarinhena).
+
+<a href="https://buymeacoffee.com/pcarinhena"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-pcarinhena-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee"></a>
 
 ## 📄 License
 
