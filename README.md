@@ -21,16 +21,16 @@ Claude · Codex · Cursor · OpenCode Go
 <table>
 <tr>
 <td width="340" valign="top">
-<img src="docs/screenshot.png" alt="OpenUsage widget in compact mode: one card per provider, a ring per account" width="320">
+<img src="docs/screenshot.png" alt="OpenUsage widget in compact mode: one card per provider, one line per account with its rings and numbers" width="320">
 </td>
 <td valign="top">
 
 ### ✨ What you get
 
 - **Every limit at a glance:** 5-hour, weekly and billing-cycle windows, each with its reset time.
-- **Two layouts:** **Compact** (above) gives each provider one card with a ring per account: outer ring = weekly, inner ring = 5 hours. **Normal** shows every limit as a bar.
+- **Two layouts:** **Compact** (above) gives each provider one card and each account one line: a double ring (outer = weekly, inner = 5 hours), the plan and next reset, and the 5h / weekly numbers. **Normal** shows every limit as a bar.
 - **Multiple accounts:** two Claude or Codex logins side by side, added from the **+** button.
-- **Color warnings:** rings and bars turn **orange at 50%** and **red at 80%**.
+- **Color warnings:** rings and bars turn **orange at 50%** and **red at 80%**; a used-up limit is always a full red ring.
 - **Used / Left:** show how much you have used or how much is left.
 - **Settings and updates:** the **⚙** button picks the layout and Used/Left, shows the version and updates the widget in one click.
 - **Plan and credits:** plan badge (PRO, PLUS, MAX…), credit balance, on-demand and bonus spend.
@@ -204,7 +204,19 @@ As on Windows, a provider with an `"error"` field only means the user does not u
 | **⟳** | Refreshes now (it also refreshes every 5 minutes). |
 | **✕** | Hides the widget; the tray / menu bar icon brings it back. |
 
-Hover a ring or a row to see every limit with its reset time, the plan and any error.
+### Reading the compact layout
+
+```text
+ ◔  paulo            5h   39%     outer ring  weekly limit (or the billing cycle)
+    PRO · ↻ 00:19    wk   19%     inner ring  5-hour limit
+```
+
+- **↻** is when the 5-hour limit resets (or the weekly one, when there is no 5-hour limit).
+- Colors follow the used share: **orange** from 50%, **red** from 80%. A used-up limit is a **full red ring** in both Used and Left.
+- Providers you are not signed in to are left out; the Normal layout shows them with a hint on how to sign in.
+- An account whose login needs attention (expired token, say) shows **!** and the reason.
+
+Hover a line to see every limit with its reset time, the plan and any error.
 
 ### Settings
 
