@@ -211,7 +211,7 @@ Hover a ring or a row to see every limit with its reset time, the plan and any e
 <img src="docs/settings.png" alt="OpenUsage settings: numbers, layout, version and updates" width="380">
 
 - **Numbers:** **Used** or **Left**, the default for every limit.
-- **Layout:** **Compact** (a card per provider with a ring per account) or **Normal** (a card per account with a bar per limit).
+- **Layout:** **Compact** (a card per provider, a line per account: the ring, the plan and next reset, then the 5h / weekly numbers) or **Normal** (a card per account with a bar per limit). Compact leaves out providers you are not signed in to; Normal keeps them with a hint on how to sign in. A used-up limit is always a full red ring, even when showing what is left.
 - **About:** the version and commit in use. The widget looks for a new version when it starts and once a day. **Update now** pulls it (`git pull --ff-only`) and restarts the widget; on macOS the app is rebuilt first. A copy installed from the ZIP (without Git) can't update itself: download it again.
 
 <details>

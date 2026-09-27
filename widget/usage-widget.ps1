@@ -172,9 +172,17 @@ try {
 $script:lastError = ''
 $script:proc = $null
 
+# In compact mode a provider with no account at all (never signed in, no key, nothing to show) gets no card;
+# the normal layout keeps it, with the hint on how to sign in.
+function Test-Shown($u) {
+  if ($script:layout -ne 'compact') { return $true }
+  return $u.account -or @($u.windows).Count -or @($u.extras).Count -or -not $u.error
+}
+
 function Render {
   $ui.List.Children.Clear()
-  if (-not $script:data.Count) {
+  $script:shown = @($script:data | Where-Object { Test-Shown $_ })
+  if (-not $script:shown.Count) {
     $msg = if ($script:proc) { 'Loading...' } else { 'No data' }
     $ui.List.Children.Add((New-Text $msg $C.Muted)) | Out-Null
   }
@@ -188,7 +196,7 @@ function Render {
 # One card per account, with every limit as a bar.
 function Render-Normal {
   $first = $true
-  foreach ($u in $script:data) {
+  foreach ($u in $script:shown) {
     # One card per provider so each block reads as a unit.
     $card = New-Object System.Windows.Controls.Border
     $card.Background = Brush $C.Card
@@ -268,7 +276,7 @@ function Render-Normal {
 }
 
 # ---- compact ------------------------------------------------------------------
-# One card per provider; each account is a ring pair: outer arc = weekly (or the billing cycle), inner = 5 hours.
+# One card per provider, one line per account with a ring pair: outer arc = weekly (or the billing cycle), inner = 5 hours.
 $script:ringPrev = @{}
 
 function Get-Slots($u) {
@@ -280,6 +288,9 @@ function Get-Slots($u) {
 }
 
 function Get-Shown([double]$used) { if ($script:display -eq 'used') { $used } else { 100 - $used } }
+
+# How much of a ring to fill: the shown value, except that a used-up limit is always a full ring (in red).
+function Get-ArcPct([double]$used) { if ($used -ge 100) { 100 } else { Get-Shown $used } }
 
 function Get-SlotName($w) {
   if (-not $w) { return '' }
@@ -331,41 +342,31 @@ function New-Track([double]$size, [double]$t) {
   return $e
 }
 
-function New-Ring($u, [double]$size = 56) {
-  $t = 5
+# Outer arc = weekly (or the billing cycle), inner arc = 5 hours. The numbers sit beside it, not inside.
+function New-Ring($u, [double]$size = 42) {
+  $t = 4
   $inner = $size - 2 * ($t + 3)
   $slots = Get-Slots $u
   $g = New-Object System.Windows.Controls.Grid
   $g.Width = $size; $g.Height = $size
   $key = if ($u.key) { $u.key } else { $u.id }
   $g.Children.Add((New-Track $size $t)) | Out-Null
-  $inRing = $slots.short -and $slots.long
-  if ($inRing) { $g.Children.Add((New-Track $inner $t)) | Out-Null }
+  $both = $slots.short -and $slots.long
+  if ($both) { $g.Children.Add((New-Track $inner $t)) | Out-Null }
   if ($slots.long) {
     $lv = Level $slots.long.usedPct
-    $g.Children.Add((New-Arc $size $t (Get-Shown $slots.long.usedPct) $(if ($lv) { $lv } else { $C.Muted }) "$key|long")) | Out-Null
+    $g.Children.Add((New-Arc $size $t (Get-ArcPct $slots.long.usedPct) $(if ($lv) { $lv } else { $C.Muted }) "$key|long")) | Out-Null
   }
-  $main = if ($slots.short) { $slots.short } else { $slots.long }
-  if ($inRing) {
+  if ($slots.short) {
     $lv = Level $slots.short.usedPct
-    $arc = New-Arc $inner $t (Get-Shown $slots.short.usedPct) $(if ($lv) { $lv } else { $C.Text }) "$key|short"
-    $g.Children.Add($arc) | Out-Null
+    $d = if ($both) { $inner } else { $size }
+    $g.Children.Add((New-Arc $d $t (Get-ArcPct $slots.short.usedPct) $(if ($lv) { $lv } else { $C.Text }) "$key|short")) | Out-Null
   }
-  $center = New-Object System.Windows.Controls.TextBlock
-  $center.HorizontalAlignment = 'Center'; $center.VerticalAlignment = 'Center'
-  if ($main) {
-    $lv = Level $main.usedPct
-    $value = [math]::Round((Get-Shown $main.usedPct))
-    # Three digits need a smaller size to stay inside the inner ring.
-    $center.Inlines.Add((New-Object System.Windows.Documents.Run ([string]$value) -Property @{
-      FontSize = $(if ($value -ge 100) { 11.5 } else { 13.5 }); FontWeight = 'SemiBold'; Foreground = (Brush $(if ($lv) { $lv } else { $C.Text })) }))
-    $center.Inlines.Add((New-Object System.Windows.Documents.Run '%' -Property @{ FontSize = 9; Foreground = (Brush $C.Muted) }))
-  } else {
-    $center.Text = '!'
-    $center.FontWeight = 'SemiBold'
-    $center.Foreground = Brush $C.Warn
+  if (-not $slots.short -and -not $slots.long) {
+    $x = New-Text '!' $C.Warn 13 'SemiBold'
+    $x.HorizontalAlignment = 'Center'; $x.VerticalAlignment = 'Center'
+    $g.Children.Add($x) | Out-Null
   }
-  $g.Children.Add($center) | Out-Null
   return $g
 }
 
@@ -408,88 +409,92 @@ function Add-Hover($el) {
   $el.add_MouseLeave({ param($s) $s.Background = [System.Windows.Media.Brushes]::Transparent })
 }
 
-# A lone account gets its ring plus the numbers and reset times beside it.
+# One line per account: ring, name with plan and next reset, then the 5h / weekly numbers on the right.
 function New-AccountRow($u) {
   $row = New-Object System.Windows.Controls.Border
   $row.CornerRadius = 8
-  $row.Padding = '6'
-  $row.Margin = '-6,6,-6,-4'
+  $row.Padding = '6,5,8,5'
+  $row.Margin = '-6,0,-6,0'
   Add-Hover $row
   $row.ToolTip = New-Tip $u
-  $dock = New-Object System.Windows.Controls.DockPanel
-  $ring = New-Ring $u
-  $ring.Margin = '0,0,14,0'
-  [System.Windows.Controls.DockPanel]::SetDock($ring, 'Left')
-  $dock.Children.Add($ring) | Out-Null
-  $info = New-Object System.Windows.Controls.StackPanel
-  $info.VerticalAlignment = 'Center'
-  if ($u.account) {
-    $a = New-Text ([string]$u.account) $C.Muted 11.5
-    $a.TextTrimming = 'CharacterEllipsis'
-    $a.Margin = '0,0,0,3'
-    $info.Children.Add($a) | Out-Null
+  $grid = New-Object System.Windows.Controls.Grid
+  foreach ($w in 'Auto', '*', 'Auto') {
+    $cd = New-Object System.Windows.Controls.ColumnDefinition
+    $cd.Width = $w
+    $grid.ColumnDefinitions.Add($cd)
   }
-  $slots = Get-Slots $u
-  foreach ($w in @($slots.short, $slots.long) | Where-Object { $_ }) {
-    $lv = Level $w.usedPct
-    $label = New-Object System.Windows.Controls.TextBlock
-    $label.Inlines.Add((New-Object System.Windows.Documents.Run $w.label -Property @{ FontSize = 12.5 }))
-    $reset = Format-ResetShort $w.resetsAt
-    if ($reset) { $label.Inlines.Add((New-Object System.Windows.Documents.Run "  $reset" -Property @{ Foreground = (Brush $C.Muted); FontSize = 11 })) }
-    $label.TextTrimming = 'CharacterEllipsis'
-    $r = New-Row $label (New-Text ("{0}%" -f [math]::Round((Get-Shown $w.usedPct))) $(if ($lv) { $lv } else { $C.Text }) 12.5 'SemiBold')
-    $r.Margin = '0,2,0,0'
-    $info.Children.Add($r) | Out-Null
-  }
-  if (-not $slots.short -and -not $slots.long -and $u.error) {
-    $e = New-Text ([string]$u.error) $C.Muted 11.5
-    $e.TextWrapping = 'Wrap'
-    $info.Children.Add($e) | Out-Null
-  }
-  $dock.Children.Add($info) | Out-Null
-  $row.Child = $dock
-  return $row
-}
+  $grid.Children.Add((New-Ring $u)) | Out-Null
 
-# Several accounts sit side by side: ring, short name and the weekly number under it.
-function New-AccountTile($u) {
-  $tile = New-Object System.Windows.Controls.Border
-  $tile.CornerRadius = 8
-  $tile.Padding = '2,6,2,5'
-  $tile.Width = 63
-  Add-Hover $tile
-  $tile.ToolTip = New-Tip $u
-  $sp = New-Object System.Windows.Controls.StackPanel
-  $ring = New-Ring $u 52
-  $ring.HorizontalAlignment = 'Center'
-  $sp.Children.Add($ring) | Out-Null
-  $short = Get-ShortAccount $u
-  if ($short) {
-    $name = New-Text $short $C.Text 11
-    $name.TextTrimming = 'CharacterEllipsis'
-    $name.HorizontalAlignment = 'Center'
-    $name.Margin = '0,6,0,0'
-    $sp.Children.Add($name) | Out-Null
-  }
   $slots = Get-Slots $u
-  if ($slots.short -and $slots.long) {
-    $wk = New-Text ("{0} {1}%" -f (Get-SlotName $slots.long), [math]::Round((Get-Shown $slots.long.usedPct))) $C.Muted 10
-    $wk.HorizontalAlignment = 'Center'
-    $sp.Children.Add($wk) | Out-Null
-  } elseif ($slots.long -or $slots.short) {
-    $only = if ($slots.long) { $slots.long } else { $slots.short }
-    $wk = New-Text (Get-SlotName $only) $C.Muted 10
-    $wk.HorizontalAlignment = 'Center'
-    $sp.Children.Add($wk) | Out-Null
+  $hasData = $slots.short -or $slots.long
+  $plan = if ($u.plan) { ([string]$u.plan).ToUpper() } else { '' }
+  # Without a known account (an API key, say) there is no name: the plan, or just the next line, leads.
+  $title = Get-ShortAccount $u
+  if (-not $title -and $plan) { $title = $plan; $plan = '' }
+  $mid = New-Object System.Windows.Controls.StackPanel
+  $mid.VerticalAlignment = 'Center'
+  $mid.Margin = '12,0,10,0'
+  [System.Windows.Controls.Grid]::SetColumn($mid, 1)
+  if ($title) {
+    $name = New-Text $title $C.Text 13
+    $name.TextTrimming = 'CharacterEllipsis'
+    $mid.Children.Add($name) | Out-Null
   }
-  $tile.Child = $sp
-  return $tile
+  $main = if ($slots.short) { $slots.short } else { $slots.long }
+  $parts = @()
+  if ($plan) { $parts += $plan }
+  if ($main -and $main.resetsAt) { $parts += "$([char]0x21BB) $(Format-ResetShort $main.resetsAt)" }
+  $subText = $parts -join "  $([char]0x00B7)  "
+  $subColor = $C.Muted
+  if ($u.error) { $subText = if ($hasData) { 'stale' } else { [string]$u.error }; $subColor = if ($hasData) { $C.Warn } else { $C.Muted } }
+  if ($subText) {
+    $sub = New-Text $subText $subColor $(if ($title) { 11.5 } else { 12 })
+    if ($title) {
+      $sub.TextTrimming = 'CharacterEllipsis'
+      $sub.Margin = '0,1,0,0'
+    } else {
+      $sub.TextWrapping = 'Wrap'
+    }
+    $mid.Children.Add($sub) | Out-Null
+  }
+  $grid.Children.Add($mid) | Out-Null
+
+  # Numbers in a column of their own, labels right-aligned so the percentages line up.
+  $nums = New-Object System.Windows.Controls.Grid
+  $nums.VerticalAlignment = 'Center'
+  [System.Windows.Controls.Grid]::SetColumn($nums, 2)
+  foreach ($w in 'Auto', 'Auto') {
+    $cd = New-Object System.Windows.Controls.ColumnDefinition
+    $cd.Width = $w
+    $nums.ColumnDefinitions.Add($cd)
+  }
+  $i = 0
+  foreach ($w in @($slots.short, $slots.long) | Where-Object { $_ }) {
+    $nums.RowDefinitions.Add((New-Object System.Windows.Controls.RowDefinition))
+    $lbl = New-Text (Get-SlotName $w) $C.Muted 11.5
+    $lbl.HorizontalAlignment = 'Right'; $lbl.VerticalAlignment = 'Center'
+    $lbl.Margin = '0,0,8,0'
+    [System.Windows.Controls.Grid]::SetRow($lbl, $i)
+    $lv = Level $w.usedPct
+    $val = New-Text ("{0}%" -f [math]::Round((Get-Shown $w.usedPct))) $(if ($lv) { $lv } else { $C.Text }) 13 'SemiBold'
+    $val.HorizontalAlignment = 'Right'
+    $val.MinWidth = 34
+    $val.TextAlignment = 'Right'
+    [System.Windows.Controls.Grid]::SetRow($val, $i)
+    [System.Windows.Controls.Grid]::SetColumn($val, 1)
+    $nums.Children.Add($lbl) | Out-Null
+    $nums.Children.Add($val) | Out-Null
+    $i++
+  }
+  $grid.Children.Add($nums) | Out-Null
+  $row.Child = $grid
+  return $row
 }
 
 function Render-Compact {
   # Group accounts by provider, keeping the order providers arrive in.
   $groups = [ordered]@{}
-  foreach ($u in $script:data) {
+  foreach ($u in $script:shown) {
     if (-not $groups.Contains($u.id)) { $groups[$u.id] = New-Object System.Collections.ArrayList }
     $null = $groups[$u.id].Add($u)
   }
@@ -501,7 +506,7 @@ function Render-Compact {
     $card.BorderBrush = Brush $C.CardBorder
     $card.BorderThickness = 1
     $card.CornerRadius = 10
-    $card.Padding = '12,10,12,10'
+    $card.Padding = '12,10,12,6'
     if (-not $first) { $card.Margin = '0,8,0,0' }
     $first = $false
     $section = New-Object System.Windows.Controls.StackPanel
@@ -517,14 +522,10 @@ function Render-Compact {
     $count.VerticalAlignment = 'Center'
     $section.Children.Add((New-Row $head $count)) | Out-Null
 
-    if ($accounts.Count -eq 1) {
-      $section.Children.Add((New-AccountRow $accounts[0])) | Out-Null
-    } else {
-      $wrap = New-Object System.Windows.Controls.WrapPanel
-      $wrap.Margin = '-4,6,-4,-2'
-      foreach ($u in $accounts) { $wrap.Children.Add((New-AccountTile $u)) | Out-Null }
-      $section.Children.Add($wrap) | Out-Null
-    }
+    $rows = New-Object System.Windows.Controls.StackPanel
+    $rows.Margin = '0,6,0,0'
+    foreach ($u in $accounts) { $rows.Children.Add((New-AccountRow $u)) | Out-Null }
+    $section.Children.Add($rows) | Out-Null
     $ui.List.Children.Add($card) | Out-Null
   }
 }

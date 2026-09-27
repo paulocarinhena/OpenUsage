@@ -214,6 +214,15 @@ final class Model: ObservableObject {
     }
   }
 
+  /**
+   * In compact mode a provider with no account at all (never signed in, no key, nothing to show) gets no card;
+   * the normal layout keeps it, with the hint on how to sign in.
+   */
+  var shown: [ProviderUsage] {
+    if layout != "compact" { return data }
+    return data.filter { $0.account != nil || !$0.windows.isEmpty || !$0.extras.isEmpty || $0.error == nil }
+  }
+
   var trayText: String {
     let parts = data.compactMap { u -> String? in
       guard let m = u.windows.map(\.usedPct).max() else { return nil }
@@ -401,7 +410,7 @@ struct Card: View {
 }
 
 // ---- compact ---------------------------------------------------------------------
-// One card per provider; each account is a ring pair: outer arc = weekly (or the billing cycle), inner = 5 hours.
+// One card per provider, one line per account with a ring pair: outer arc = weekly (or the billing cycle), inner = 5 hours.
 
 struct Slots {
   var short: UsageWindow?
@@ -452,44 +461,41 @@ func tipText(_ u: ProviderUsage, _ display: String) -> String {
   return lines.joined(separator: "\n")
 }
 
+/** Outer arc = weekly (or the billing cycle), inner arc = 5 hours. The numbers sit beside it, not inside. */
 struct Ring: View {
   let u: ProviderUsage
   let display: String
-  var size: CGFloat = 56
+  var size: CGFloat = 42
   // Arcs grow from zero when the ring first appears, then follow new values.
   @StateObject private var appeared = LocalState(false)
 
   var body: some View {
     let s = slots(u)
-    let t: CGFloat = 5
+    let t: CGFloat = 4
     let inner = size - 2 * (t + 3)
-    let main = s.short ?? s.long
+    let both = s.short != nil && s.long != nil
     ZStack {
       Circle().stroke(C.track, lineWidth: t).frame(width: size - t, height: size - t)
-      if let long = s.long { arc(long, diameter: size - t, color: level(long.usedPct) ?? C.muted) }
-      if let short = s.short, s.long != nil {
-        Circle().stroke(C.track, lineWidth: t).frame(width: inner - t, height: inner - t)
-        arc(short, diameter: inner - t, color: level(short.usedPct) ?? C.text)
+      if both { Circle().stroke(C.track, lineWidth: t).frame(width: inner - t, height: inner - t) }
+      if let long = s.long { arc(long, diameter: size - t, width: t, color: level(long.usedPct) ?? C.muted) }
+      if let short = s.short {
+        arc(short, diameter: (both ? inner : size) - t, width: t, color: level(short.usedPct) ?? C.text)
       }
-      if let m = main {
-        let value = Int(shown(m, display).rounded())
-        // Three digits need a smaller size to stay inside the inner ring.
-        (Text("\(value)").font(.system(size: value >= 100 ? 11.5 : 13.5, weight: .semibold))
-          .foregroundColor(level(m.usedPct) ?? C.text)
-          + Text("%").font(.system(size: 9)).foregroundColor(C.muted))
-      } else {
-        Text("!").font(.system(size: 13.5, weight: .semibold)).foregroundColor(C.warn)
+      if s.short == nil && s.long == nil {
+        Text("!").font(.system(size: 13, weight: .semibold)).foregroundColor(C.warn)
       }
     }
     .frame(width: size, height: size)
     .onAppear { withAnimation(.easeOut(duration: 0.55)) { appeared.value = true } }
   }
 
-  func arc(_ w: UsageWindow, diameter: CGFloat, color: Color) -> some View {
-    let p = appeared.value ? CGFloat(max(0, min(100, shown(w, display))) / 100) : 0
+  func arc(_ w: UsageWindow, diameter: CGFloat, width: CGFloat, color: Color) -> some View {
+    // A used-up limit is always a full ring (in red), whether numbers show used or left.
+    let pct = w.usedPct >= 100 ? 100 : shown(w, display)
+    let p = appeared.value ? CGFloat(max(0, min(100, pct)) / 100) : 0
     return Circle()
       .trim(from: 0, to: p)
-      .stroke(color, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+      .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
       .rotationEffect(.degrees(-90))
       .frame(width: diameter, height: diameter)
       // Under 1% a round-capped arc is just a dot, which reads as noise.
@@ -498,36 +504,7 @@ struct Ring: View {
   }
 }
 
-/** Several accounts sit side by side: ring, short name and the weekly number under it. */
-struct AccountTile: View {
-  let u: ProviderUsage
-  let display: String
-  @StateObject private var hover = LocalState(false)
-
-  var body: some View {
-    let s = slots(u)
-    let sub: String = {
-      if let l = s.long, s.short != nil { return "\(slotName(l)) \(Int(shown(l, display).rounded()))%" }
-      return slotName(s.long ?? s.short)
-    }()
-    VStack(spacing: 0) {
-      Ring(u: u, display: display, size: 52)
-      let short = shortAccount(u)
-      if !short.isEmpty {
-        Text(short).font(.system(size: 11)).lineLimit(1).truncationMode(.tail).padding(.top, 6)
-      }
-      Text(sub).font(.system(size: 10)).foregroundColor(C.muted).padding(.top, short.isEmpty ? 6 : 0)
-    }
-    .frame(width: 59)
-    .padding(.vertical, 6)
-    .padding(.horizontal, 2)
-    .background(RoundedRectangle(cornerRadius: 8).fill(hover.value ? C.hover : Color.clear))
-    .onHover { hover.value = $0 }
-    .help(tipText(u, display))
-  }
-}
-
-/** A lone account gets its ring plus the numbers and reset times beside it. */
+/** One line per account: ring, name with plan and next reset, then the 5h / weekly numbers on the right. */
 struct AccountRow: View {
   let u: ProviderUsage
   let display: String
@@ -536,34 +513,46 @@ struct AccountRow: View {
   var body: some View {
     let s = slots(u)
     let ws = [s.short, s.long].compactMap { $0 }
-    HStack(spacing: 14) {
+    let plan = u.plan?.uppercased() ?? ""
+    let short = shortAccount(u)
+    // Without a known account (an API key, say) there is no name: the plan, or just the next line, leads.
+    let title = !short.isEmpty ? short : plan
+    let sub: (String, Color) = {
+      if let e = u.error { return ws.isEmpty ? (e, C.muted) : ("stale", C.warn) }
+      var parts: [String] = []
+      if !short.isEmpty && !plan.isEmpty { parts.append(plan) }
+      if let r = (s.short ?? s.long)?.resetsAt { parts.append("\u{21BB} \(formatResetShort(r))") }
+      return (parts.joined(separator: "  \u{00B7}  "), C.muted)
+    }()
+    HStack(spacing: 0) {
       Ring(u: u, display: display)
-      VStack(alignment: .leading, spacing: 2) {
-        if let a = u.account {
-          Text(a).font(.system(size: 11.5)).foregroundColor(C.muted).lineLimit(1).truncationMode(.tail).padding(.bottom, 1)
+      VStack(alignment: .leading, spacing: 1) {
+        if !title.isEmpty { Text(title).font(.system(size: 13)).lineLimit(1).truncationMode(.tail) }
+        if !sub.0.isEmpty {
+          Text(sub.0).font(.system(size: title.isEmpty ? 12 : 11.5)).foregroundColor(sub.1)
+            .lineLimit(title.isEmpty ? 2 : 1).truncationMode(.tail)
         }
+      }
+      .padding(.leading, 12)
+      .padding(.trailing, 10)
+      Spacer(minLength: 0)
+      // Numbers in a column of their own, so the percentages line up.
+      VStack(alignment: .trailing, spacing: 2) {
         ForEach(Array(ws.enumerated()), id: \.offset) { _, w in
-          HStack {
-            let reset = formatResetShort(w.resetsAt)
-            (Text(w.label).font(.system(size: 12.5))
-              + Text(reset.isEmpty ? "" : "  \(reset)").font(.system(size: 11)).foregroundColor(C.muted))
-              .lineLimit(1).truncationMode(.tail)
-            Spacer()
-            Text("\(Int(shown(w, display).rounded()))%").font(.system(size: 12.5, weight: .semibold))
+          HStack(spacing: 8) {
+            Text(slotName(w)).font(.system(size: 11.5)).foregroundColor(C.muted)
+            Text("\(Int(shown(w, display).rounded()))%").font(.system(size: 13, weight: .semibold))
               .foregroundColor(level(w.usedPct) ?? C.text)
+              .frame(minWidth: 34, alignment: .trailing)
           }
-        }
-        if ws.isEmpty, let e = u.error {
-          Text(e).font(.system(size: 11.5)).foregroundColor(C.muted).fixedSize(horizontal: false, vertical: true)
         }
       }
     }
-    .padding(6)
+    .padding(EdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 8))
     .background(RoundedRectangle(cornerRadius: 8).fill(hover.value ? C.hover : Color.clear))
     .onHover { hover.value = $0 }
     .help(tipText(u, display))
     .padding(.horizontal, -6)
-    .padding(.top, 6)
   }
 }
 
@@ -590,7 +579,6 @@ struct CompactCard: View {
   var body: some View {
     let first = g.accounts[0]
     let name = first.name.replacingOccurrences(of: " \\(.*\\)$", with: "", options: .regularExpression)
-    let rows = stride(from: 0, to: g.accounts.count, by: 4).map { Array(g.accounts[$0..<min($0 + 4, g.accounts.count)]) }
     VStack(alignment: .leading, spacing: 0) {
       HStack {
         (Text("\(icons[g.id] ?? "")  ").foregroundColor(accents[g.id] ?? C.muted) + Text(name))
@@ -599,21 +587,12 @@ struct CompactCard: View {
         Text(g.accounts.count > 1 ? "\(g.accounts.count) accounts" : (first.plan?.uppercased() ?? ""))
           .font(.system(size: 10.5, weight: .semibold)).foregroundColor(C.muted)
       }
-      if g.accounts.count == 1 {
-        AccountRow(u: first, display: display)
-      } else {
-        VStack(alignment: .leading, spacing: 2) {
-          ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            HStack(spacing: 0) {
-              ForEach(row, id: \.uid) { AccountTile(u: $0, display: display) }
-            }
-          }
-        }
-        .padding(.top, 6)
-        .padding(.horizontal, -4)
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(g.accounts, id: \.uid) { AccountRow(u: $0, display: display) }
       }
+      .padding(.top, 6)
     }
-    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+    .padding(EdgeInsets(top: 10, leading: 12, bottom: 6, trailing: 12))
     .background(RoundedRectangle(cornerRadius: 10).fill(C.card))
     .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.cardBorder, lineWidth: 1))
   }
@@ -795,14 +774,14 @@ struct WidgetView: View {
       .padding(.bottom, 8)
       .background(DragArea())
       Rectangle().fill(C.divider).frame(height: 1).padding(.bottom, 8)
-      if m.data.isEmpty {
+      if m.shown.isEmpty {
         Text(m.refreshing ? "Loading..." : "No data").foregroundColor(C.muted)
       }
       VStack(spacing: 8) {
         if m.layout == "compact" {
-          ForEach(groups(m.data)) { CompactCard(g: $0, display: m.display) }
+          ForEach(groups(m.shown)) { CompactCard(g: $0, display: m.display) }
         } else {
-          ForEach(m.data, id: \.uid) { Card(u: $0, display: m.display) }
+          ForEach(m.shown, id: \.uid) { Card(u: $0, display: m.display) }
         }
       }
       Rectangle().fill(C.divider).frame(height: 1).padding(.top, 10).padding(.bottom, 6)
