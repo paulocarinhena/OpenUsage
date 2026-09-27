@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { clampPct, getJson, ProviderError, toMillis, type Provider, type ProviderUsage, type UsageWindow } from "./types.ts"
+import { clampPct, getJson, ProviderError, siblingProfiles, toMillis, type Provider, type ProviderUsage, type UsageWindow } from "./types.ts"
 
 const WINDOWS: ReadonlyArray<readonly [key: string, label: string]> = [
   ["five_hour", "5-Hour"],
@@ -13,31 +14,36 @@ const WINDOWS: ReadonlyArray<readonly [key: string, label: string]> = [
 
 const configDir = () => process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
 
-/** On macOS Claude Code keeps its login in the Keychain rather than in .credentials.json. */
-function readKeychain(): Promise<string> {
+/**
+ * On macOS Claude Code keeps its login in the Keychain rather than in .credentials.json.
+ * A custom config folder gets its own entry, suffixed with a hash of the folder path.
+ */
+function readKeychain(profile?: string): Promise<string> {
+  const dir = profile ?? process.env.CLAUDE_CONFIG_DIR
+  const suffix = dir ? `-${createHash("sha256").update(dir).digest("hex").slice(0, 8)}` : ""
   return new Promise((resolve, reject) =>
     execFile(
       "/usr/bin/security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      ["find-generic-password", "-s", `Claude Code-credentials${suffix}`, "-w"],
       { timeout: 10_000 },
       (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
     ),
   )
 }
 
-async function readCredentials(): Promise<string> {
+async function readCredentials(profile?: string): Promise<string> {
   try {
-    return await readFile(join(configDir(), ".credentials.json"), "utf8")
+    return await readFile(join(profile ?? configDir(), ".credentials.json"), "utf8")
   } catch {
-    if (process.platform === "darwin") return readKeychain()
+    if (process.platform === "darwin") return readKeychain(profile)
     throw new Error("no credentials file")
   }
 }
 
-async function readToken() {
+async function readToken(profile?: string) {
   let raw: string
   try {
-    raw = await readCredentials()
+    raw = await readCredentials(profile)
   } catch {
     throw new ProviderError("not signed in to Claude Code")
   }
@@ -52,8 +58,8 @@ async function readToken() {
 export const claude: Provider = {
   id: "claude",
   name: "Claude",
-  async fetch(signal) {
-    const { token, plan } = await readToken()
+  async fetch(signal, profile) {
+    const { token, plan } = await readToken(profile)
     const body = await getJson(
       "https://api.anthropic.com/api/oauth/usage",
       {
@@ -79,10 +85,16 @@ export const claude: Provider = {
     }
     return { id: "claude", name: "Claude", plan, windows, extras, fetchedAt: Date.now() } satisfies ProviderUsage
   },
-  async account() {
+  async account(profile) {
     // Claude Code keeps the signed-in account in .claude.json: inside CLAUDE_CONFIG_DIR when set, else in home.
-    const file = process.env.CLAUDE_CONFIG_DIR ? join(configDir(), ".claude.json") : join(homedir(), ".claude.json")
+    const file = profile
+      ? join(profile, ".claude.json")
+      : process.env.CLAUDE_CONFIG_DIR
+        ? join(configDir(), ".claude.json")
+        : join(homedir(), ".claude.json")
     const oauth = JSON.parse(await readFile(file, "utf8"))?.oauthAccount
     return oauth?.emailAddress ?? oauth?.displayName
   },
+  // Another account lives in its own folder, e.g. ".claude-2", signed in with CLAUDE_CONFIG_DIR.
+  profiles: () => siblingProfiles(configDir(), ".claude", ".claude.json"),
 }

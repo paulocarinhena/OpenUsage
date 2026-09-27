@@ -18,4 +18,43 @@ jobs:
       - run: widget-mac/build.sh "$RUNNER_TEMP/OpenUsage.app"
       - run: test -x "$RUNNER_TEMP/OpenUsage.app/Contents/MacOS/OpenUsage"
       # Every provider should come back as JSON, even if only with a "not signed in" error.
-      - run: node --experimental-strip-types --no-warnings scripts/usage-json.ts | node -e "const a=JSON.parse(require('fs').readFileSync(0,'utf8'));if(a.length!==4)process.exit(1);console.log(a.map(u=>u.id+': '+(u.error??'ok')).join('\n'))"
+      - run: |
+          node --experimental-strip-types --no-warnings scripts/usage-json.ts | node -e "const a=JSON.parse(require('fs').readFileSync(0,'utf8'));if(a.length!==4)process.exit(1);console.log(a.map(u=>u.id+': '+(u.error??'ok')).join('\n'))"
+
+  # scripts/add-account.ts end to end on Unix, with a fake codex that "signs in" by copying an auth.json.
+  add-account:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME/.codex" "$HOME/.local/bin" "$RUNNER_TEMP/bin"
+          export PATH="$RUNNER_TEMP/bin:$HOME/.local/bin:$PATH"
+          auth() { node -e 'const p=Buffer.from(JSON.stringify({email:process.argv[1]})).toString("base64url");process.stdout.write(JSON.stringify({tokens:{id_token:"x."+p+".y",access_token:"t"}}))' "$1"; }
+          auth main@x.com > "$HOME/.codex/auth.json"
+          auth main@x.com > "$RUNNER_TEMP/same.json"
+          auth other@x.com > "$RUNNER_TEMP/other.json"
+          printf '#!/bin/sh\n[ "$1" = where ] && { echo "$CODEX_HOME"; exit 0; }\n[ -n "$FAKE_AUTH" ] || exit 1\ncp "$FAKE_AUTH" "$CODEX_HOME/auth.json"\n' > "$RUNNER_TEMP/bin/codex"
+          chmod +x "$RUNNER_TEMP/bin/codex"
+          add() { node --experimental-strip-types --no-warnings scripts/add-account.ts codex codex2; }
+          fails() { if "$@"; then echo "expected a failure: $*"; exit 1; fi; }
+
+          export FAKE_AUTH=""                        # cancelled sign-in: nothing is left behind
+          fails add
+          test ! -e "$HOME/.codex-2" && test ! -e "$HOME/.local/bin/codex2"
+          export FAKE_AUTH="$RUNNER_TEMP/same.json"  # the main account again: refused and undone
+          fails add
+          test ! -e "$HOME/.codex-2" && test ! -e "$HOME/.local/bin/codex2"
+          export FAKE_AUTH="$RUNNER_TEMP/other.json" # another account: folder and command stay
+          add
+          test "$(codex2 where)" = "$HOME/.codex-2"
+          fails add                                  # the name is taken now
+          node --experimental-strip-types --no-warnings -e "import('./src/providers/index.ts').then(async (m) => { const a = (await m.fetchAllUsage('codex')).map((u) => u.account).join(','); console.log(a); if (a !== 'main@x.com,other@x.com') process.exit(1) })"

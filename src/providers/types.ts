@@ -17,6 +17,8 @@ export interface UsageExtra {
 
 export interface ProviderUsage {
   readonly id: ProviderId
+  /** Unique per card: the provider id, plus the profile folder for extra accounts, e.g. "claude:.claude-2". */
+  readonly key?: string
   readonly name: string
   readonly windows: readonly UsageWindow[]
   readonly extras: readonly UsageExtra[]
@@ -32,9 +34,12 @@ export interface ProviderUsage {
 export interface Provider {
   readonly id: ProviderId
   readonly name: string
-  fetch(signal?: AbortSignal): Promise<ProviderUsage>
+  /** `profile` is a config folder of another signed-in account; omitted means the default one. */
+  fetch(signal?: AbortSignal, profile?: string): Promise<ProviderUsage>
   /** Reads the signed-in account from local files only; resolves undefined when unknown. */
-  account?(): Promise<string | undefined>
+  account?(profile?: string): Promise<string | undefined>
+  /** Config folders of extra accounts, besides the default one. */
+  profiles?(): Promise<string[]>
 }
 
 export class ProviderError extends Error {}
@@ -56,6 +61,25 @@ export async function sqliteGet(path: string, sql: string, ...params: unknown[])
   } finally {
     db.close()
   }
+}
+
+/**
+ * Folders in home named like the default one plus a suffix (e.g. ".claude-2", ".codex-work")
+ * that hold `marker`: a second account signed in with CLAUDE_CONFIG_DIR / CODEX_HOME.
+ */
+export async function siblingProfiles(defaultDir: string, prefix: string, marker: string): Promise<string[]> {
+  const { readdir, stat } = await import("node:fs/promises")
+  const { homedir } = await import("node:os")
+  const { join, resolve } = await import("node:path")
+  const home = homedir()
+  const names = (await readdir(home).catch(() => [] as string[])).filter((n) => n.startsWith(prefix) && n !== prefix)
+  const found: string[] = []
+  for (const n of names.sort()) {
+    const dir = join(home, n)
+    if (resolve(dir).toLowerCase() === resolve(defaultDir).toLowerCase()) continue
+    if (await stat(join(dir, marker)).then((s) => s.isFile(), () => false)) found.push(dir)
+  }
+  return found
 }
 
 /** Decodes a JWT payload without verifying it. */

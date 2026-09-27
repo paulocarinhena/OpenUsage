@@ -21,15 +21,18 @@ Claude · Codex · Cursor · OpenCode Go
 <table>
 <tr>
 <td width="340" valign="top">
-<img src="docs/screenshot.png" alt="OpenUsage widget showing Claude, Codex, Cursor and OpenCode Go usage" width="320">
+<img src="docs/screenshot.png" alt="OpenUsage widget in compact mode: one card per provider, a ring per account" width="320">
 </td>
 <td valign="top">
 
 ### ✨ What you get
 
-- **Every limit at a glance:** 5-hour, weekly and billing-cycle windows, each with a progress bar and its reset time.
-- **Color warnings:** bars turn **orange at 50%** and **red at 80%**.
-- **Used / Left toggle:** show how much you have used or how much is left.
+- **Every limit at a glance:** 5-hour, weekly and billing-cycle windows, each with its reset time.
+- **Two layouts:** **Compact** (above) gives each provider one card with a ring per account: outer ring = weekly, inner ring = 5 hours. **Normal** shows every limit as a bar.
+- **Multiple accounts:** two Claude or Codex logins side by side, added from the **+** button.
+- **Color warnings:** rings and bars turn **orange at 50%** and **red at 80%**.
+- **Used / Left:** show how much you have used or how much is left.
+- **Settings and updates:** the **⚙** button picks the layout and Used/Left, shows the version and updates the widget in one click.
 - **Plan and credits:** plan badge (PRO, PLUS, MAX…), credit balance, on-demand and bonus spend.
 - **Stays out of the way:** always-on-top, draggable, lives in the tray (Windows) or menu bar (macOS) and follows the system light/dark theme.
 - **Auto refresh** every 5 minutes. The last good numbers are cached, so they survive restarts and rate limits.
@@ -191,13 +194,40 @@ As on Windows, a provider with an `"error"` field only means the user does not u
 
 ## 🖱️ Usage
 
+### Header buttons
+
+| Button | What it does |
+|---|---|
+| **⚙** | Settings (below). A dot on it means an update is waiting. |
+| **+** | Adds another Claude or Codex account (see [Multiple accounts](#multiple-accounts)). |
+| **Used / Left** | Flips every number between used and left. |
+| **⟳** | Refreshes now (it also refreshes every 5 minutes). |
+| **✕** | Hides the widget; the tray / menu bar icon brings it back. |
+
+Hover a ring or a row to see every limit with its reset time, the plan and any error.
+
+### Settings
+
+<img src="docs/settings.png" alt="OpenUsage settings: numbers, layout, version and updates" width="380">
+
+- **Numbers:** **Used** or **Left**, the default for every limit.
+- **Layout:** **Compact** (a card per provider with a ring per account) or **Normal** (a card per account with a bar per limit).
+- **About:** the version and commit in use. The widget looks for a new version when it starts and once a day. **Update now** pulls it (`git pull --ff-only`) and restarts the widget; on macOS the app is rebuilt first. A copy installed from the ZIP (without Git) can't update itself: download it again.
+
+<details>
+<summary>Normal layout</summary>
+
+<img src="docs/screenshot-normal.png" alt="OpenUsage widget in normal mode: a card per account with a bar per limit" width="320">
+
+</details>
+
 ### On Windows
 
 Double-click `widget/usage-widget.vbs`.
 
 - **Tray icon:** shows or hides the widget.
 - **Desktop icon:** the installer puts an **OpenUsage** shortcut on the desktop.
-- **Right-click the tray icon:** Refresh, Always on top, Start with Windows, Desktop shortcut and Quit.
+- **Right-click the tray icon:** Refresh, Settings, Add account, Always on top, Start with Windows, Desktop shortcut and Quit.
 - **Start with Windows:** creates a shortcut in `shell:startup` that opens the widget at login.
 - **Desktop shortcut:** adds or removes the desktop icon.
 
@@ -205,11 +235,11 @@ Double-click `widget/usage-widget.vbs`.
 
 Open **OpenUsage** from Spotlight, Launchpad or `~/Applications`.
 
-- **Menu bar icon:** Show / hide, Refresh, Always on top, Start at login and Quit.
+- **Menu bar icon:** Show / hide, Refresh, Settings…, Add account…, Always on top, Start at login and Quit.
 - **Drag the header** to move the widget; it remembers where you left it.
 - **Start at login:** adds a LaunchAgent (`~/Library/LaunchAgents/com.openusage.widget.plist`) that opens the app at login.
 
-To see the raw data in a terminal: `npm run probe` (or `npm run probe -- claude cursor` to pick providers).
+To see the raw data in a terminal: `npm run probe` (or `npm run probe -- claude cursor` to pick providers). To check for or apply an update from a terminal: `node --experimental-strip-types scripts/update.ts check` (or `apply`), or just `git pull`.
 
 ## 🔌 Providers
 
@@ -221,6 +251,22 @@ The widget only **reads** credentials the tools themselves already saved on your
 | Codex | `~/.codex/auth.json` (or `CODEX_HOME`); offline, falls back to the latest session log | Sign in to Codex with your ChatGPT account. API-key logins have no plan limits. |
 | Cursor | `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, or `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS | Open Cursor and sign in. |
 | OpenCode Go | `OPENCODE_GO_API_KEY`, or the key saved by opencode's `/connect` | Run `/connect` in opencode and pick OpenCode Go. |
+
+### Multiple accounts
+
+Claude Code and Codex keep one login per config folder, so each extra account gets its own folder in your home (`.claude-2`, `.codex-work`…) and a command that opens it, like `claude2`. The widget finds these folders and shows one card per account.
+
+- **Windows and macOS:** click **+** in the widget header (or **Add account** in the tray / menu bar menu), pick a command name and sign in with the other account in the terminal that opens.
+- **Linux, or any terminal:**
+
+  ```bash
+  npm run add-account -- claude claude2   # then sign in and type /exit
+  npm run add-account -- codex codex2     # signs in through the browser
+  ```
+
+After that, `claude` opens your main account and `claude2` the other one, in any terminal (the same goes for `codex` / `codex2`). The command lives next to `claude` on Windows and in `~/.local/bin` elsewhere. If nothing was signed in, or the browser signed in to your main account again, the new folder and command are removed; sign out in the browser (or use a private window) and try again.
+
+Claude tokens are only renewed by Claude Code itself, so open `claude2` now and then to keep its card fresh. To remove an account, delete its folder and command.
 
 ## 🧹 Uninstall
 
@@ -246,6 +292,8 @@ Layout:
 
 - `src/providers/`: one file per provider, all returning the same shape (`ProviderUsage` in `types.ts`).
 - `scripts/usage-json.ts`: prints every provider as one JSON array; this is what the widget calls.
+- `scripts/update.ts`: the version, and the self-update behind **Update now** (`check` / `apply`).
+- `scripts/add-account.ts`: adds another Claude or Codex account (folder, command, sign-in); the widgets' **+** button runs it.
 - `widget/usage-widget.ps1`: the WPF UI. The `.vbs` only launches it without a console.
 - `widget/openusage.ico`: the app icon, used by the tray and the shortcuts.
 - `widget-mac/OpenUsage.swift`: the macOS app (AppKit + SwiftUI). `widget-mac/build.sh` compiles it into `OpenUsage.app`.

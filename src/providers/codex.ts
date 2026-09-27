@@ -6,6 +6,7 @@ import {
   getJson,
   jwtPayload,
   ProviderError,
+  siblingProfiles,
   toMillis,
   type Provider,
   type ProviderUsage,
@@ -23,10 +24,10 @@ function windowLabel(seconds: number | undefined, fallback: string) {
   return `${hours}-Hour`
 }
 
-async function readAuth() {
+async function readAuth(dir: string) {
   let raw: string
   try {
-    raw = await readFile(join(home(), "auth.json"), "utf8")
+    raw = await readFile(join(dir, "auth.json"), "utf8")
   } catch {
     throw new ProviderError("not signed in to Codex")
   }
@@ -35,8 +36,8 @@ async function readAuth() {
   return { token: tokens.access_token as string, accountId: tokens.account_id as string | undefined }
 }
 
-async function fromApi(signal?: AbortSignal): Promise<ProviderUsage> {
-  const { token, accountId } = await readAuth()
+async function fromApi(dir: string, signal?: AbortSignal): Promise<ProviderUsage> {
+  const { token, accountId } = await readAuth(dir)
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     "User-Agent": "codex-cli",
@@ -66,8 +67,8 @@ async function fromApi(signal?: AbortSignal): Promise<ProviderUsage> {
 }
 
 /** Newest `*.jsonl` under ~/.codex/sessions/YYYY/MM/DD. */
-async function newestSessionFile(): Promise<string | undefined> {
-  let dir = join(home(), "sessions")
+async function newestSessionFile(codexHome: string): Promise<string | undefined> {
+  let dir = join(codexHome, "sessions")
   for (let depth = 0; depth < 3; depth++) {
     const entries = (await readdir(dir).catch(() => [] as string[])).filter((n) => /^\d+$/.test(n)).sort()
     if (!entries.length) return
@@ -80,8 +81,8 @@ async function newestSessionFile(): Promise<string | undefined> {
 }
 
 /** Offline fallback: the latest rate_limits snapshot Codex wrote to its session log. */
-async function fromSessions(): Promise<ProviderUsage> {
-  const file = await newestSessionFile()
+async function fromSessions(dir: string): Promise<ProviderUsage> {
+  const file = await newestSessionFile(dir)
   if (!file) throw new ProviderError("no Codex usage data yet")
   const lines = (await readFile(file, "utf8")).trimEnd().split("\n")
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -119,19 +120,22 @@ async function fromSessions(): Promise<ProviderUsage> {
 export const codex: Provider = {
   id: "codex",
   name: "Codex",
-  async fetch(signal) {
+  async fetch(signal, profile) {
+    const dir = profile ?? home()
     try {
-      return await fromApi(signal)
+      return await fromApi(dir, signal)
     } catch (e) {
       try {
-        return await fromSessions()
+        return await fromSessions(dir)
       } catch {
         throw e
       }
     }
   },
-  async account() {
-    const idToken = JSON.parse(await readFile(join(home(), "auth.json"), "utf8"))?.tokens?.id_token
+  async account(profile) {
+    const idToken = JSON.parse(await readFile(join(profile ?? home(), "auth.json"), "utf8"))?.tokens?.id_token
     return idToken ? jwtPayload(idToken)?.email : undefined
   },
+  // Another account lives in its own folder, e.g. ".codex-2", signed in with CODEX_HOME.
+  profiles: () => siblingProfiles(home(), ".codex", "auth.json"),
 }

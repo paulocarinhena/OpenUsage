@@ -26,6 +26,9 @@ struct UsageExtra: Codable {
 
 struct ProviderUsage: Codable {
   var id: String
+  /** One per account; missing in caches written before multi-account support. */
+  var key: String?
+  var uid: String { key ?? id }
   var name: String
   var windows: [UsageWindow]
   var extras: [UsageExtra]
@@ -33,6 +36,24 @@ struct ProviderUsage: Codable {
   var account: String?
   var error: String?
   var fetchedAt: Double
+}
+
+/** What scripts/update.ts prints. */
+struct UpdateInfo: Codable {
+  var version: String?
+  var commit: String?
+  var behind: Int?
+  var error: String?
+  var updated: Bool?
+}
+
+struct UpdateState {
+  var busy = ""
+  var version = ""
+  var commit = ""
+  var behind = 0
+  var error = ""
+  var checked = false
 }
 
 struct Cache: Codable {
@@ -60,8 +81,11 @@ final class Model: ObservableObject {
   @Published var refreshing = false
   @Published var lastError = ""
   @Published var display = defaults.string(forKey: "display") ?? "used"
+  @Published var layout = defaults.string(forKey: "layout") == "compact" ? "compact" : "normal"
+  @Published var update = UpdateState()
 
   private var proc: Process?
+  private var updateProc: Process?
 
   init() {
     // The last good result is cached on disk, so a restart (or a rate-limited first fetch) still shows numbers.
@@ -71,25 +95,30 @@ final class Model: ObservableObject {
     }
   }
 
-  func toggleDisplay() {
-    display = display == "used" ? "remaining" : "used"
-    defaults.set(display, forKey: "display")
+  func toggleDisplay() { setDisplay(display == "used" ? "remaining" : "used") }
+
+  func setDisplay(_ v: String) {
+    display = v
+    defaults.set(v, forKey: "display")
   }
 
-  func refresh() {
-    guard proc == nil, let root = resource("root") else {
-      if resource("root") == nil { lastError = "run build.sh again" }
-      return
-    }
-    let script = root + "/scripts/usage-json.ts"
+  func setLayout(_ v: String) {
+    layout = v
+    defaults.set(v, forKey: "layout")
+  }
+
+  /** Runs scripts/<name> with node and hands its stdout to `done` on the main thread; nil when it can't start. */
+  func runScript(_ name: String, _ args: [String], timeout: Double, done: @escaping (Data, Bool) -> Void) -> Process? {
+    guard let root = resource("root") else { return nil }
+    let script = root + "/scripts/" + name
     let p = Process()
     // Apps started from Finder do not get the shell's PATH, so prefer the node build.sh found.
     if let node = resource("node"), FileManager.default.isExecutableFile(atPath: node) {
       p.executableURL = URL(fileURLWithPath: node)
-      p.arguments = ["--experimental-strip-types", "--no-warnings", script]
+      p.arguments = ["--experimental-strip-types", "--no-warnings", script] + args
     } else {
       p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-      p.arguments = ["-lc", "exec node --experimental-strip-types --no-warnings \"$0\"", script]
+      p.arguments = ["-lc", "exec node --experimental-strip-types --no-warnings \"$0\" \"$@\"", script] + args
     }
     p.currentDirectoryURL = URL(fileURLWithPath: root)
     let out = Pipe()
@@ -98,20 +127,67 @@ final class Model: ObservableObject {
     do {
       try p.run()
     } catch {
-      lastError = "node not found"
-      return
+      return nil
     }
-    proc = p
-    refreshing = true
-    let timeout = DispatchWorkItem { if p.isRunning { p.terminate() } }
-    DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: timeout)
+    let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
     // Read on a background thread so a full pipe never blocks the child.
     DispatchQueue.global().async {
       let raw = out.fileHandleForReading.readDataToEndOfFile()
       p.waitUntilExit()
-      timeout.cancel()
-      DispatchQueue.main.async { self.complete(raw, timedOut: p.terminationReason == .uncaughtSignal) }
+      killer.cancel()
+      DispatchQueue.main.async { done(raw, p.terminationReason == .uncaughtSignal) }
     }
+    return p
+  }
+
+  func refresh() {
+    guard proc == nil else { return }
+    guard resource("root") != nil else {
+      lastError = "run build.sh again"
+      return
+    }
+    proc = runScript("usage-json.ts", [], timeout: 60) { raw, timedOut in self.complete(raw, timedOut: timedOut) }
+    if proc == nil {
+      lastError = "node not found"
+      return
+    }
+    refreshing = true
+  }
+
+  /** "check" asks how far behind the remote this copy is; "apply" fast-forwards it and rebuilds the app. */
+  func runUpdate(_ action: String) {
+    guard updateProc == nil else { return }
+    update.busy = action
+    updateProc = runScript("update.ts", [action], timeout: 180) { raw, _ in
+      self.updateProc = nil
+      self.update.busy = ""
+      guard let r = try? JSONDecoder().decode(UpdateInfo.self, from: raw) else {
+        self.update.error = "update check failed"
+        return
+      }
+      self.update.version = r.version ?? ""
+      self.update.commit = r.commit ?? ""
+      self.update.error = r.error ?? ""
+      if let b = r.behind { self.update.behind = b }
+      self.update.checked = true
+      if action == "apply", r.updated == true, r.error == nil { self.rebuildAndRelaunch() }
+    }
+    if updateProc == nil {
+      update.busy = ""
+      update.error = "node not found"
+    }
+  }
+
+  /** New Swift code needs a new build: build.sh quits this app, rebuilds it in place, then it is opened again. */
+  func rebuildAndRelaunch() {
+    guard let root = resource("root") else { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    p.arguments = ["-lc", "sleep 1; \"$0/widget-mac/build.sh\" \"$1\" && open \"$1\"", root, Bundle.main.bundlePath]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
   }
 
   private func complete(_ raw: Data, timedOut: Bool) {
@@ -122,9 +198,9 @@ final class Model: ObservableObject {
       return
     }
     // A transient provider failure keeps the last good numbers, flagged as stale.
-    let prev = Dictionary(data.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    let prev = Dictionary(data.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
     data = fresh.map { u in
-      if let err = u.error, var old = prev[u.id], !old.windows.isEmpty {
+      if let err = u.error, var old = prev[u.uid], !old.windows.isEmpty {
         old.error = err
         return old
       }
@@ -176,7 +252,10 @@ enum C {
   static let hover = themed(0xF1EDE8, 0x2A2725)
   static let card = themed(0xF3F0EB, 0x242120)
   static let cardBorder = themed(0xE8E3DD, 0x2E2A27)
+  static let ok = themed(0x2E8B57, 0x5BBF86)
 }
+
+let accents: [String: Color] = ["claude": themed(0xD97757, 0xD97757), "codex": themed(0x0F8A6C, 0x3DBE9C)]
 
 func level(_ pct: Double) -> Color? { pct >= 80 ? C.error : pct >= 50 ? C.warn : nil }
 
@@ -190,6 +269,21 @@ func formatReset(_ ms: Double?) -> String {
   let f = DateFormatter()
   f.setLocalizedDateFormatFromTemplate("EEEddMMM")
   return f.string(from: d) + ", " + time
+}
+
+/** Shorter, for the compact rows: "14:00", "Wed 14:00" within the week, else "14 Oct". */
+func formatResetShort(_ ms: Double?) -> String {
+  guard let ms = ms else { return "" }
+  let d = Date(timeIntervalSince1970: ms / 1000)
+  let time = DateFormatter.localizedString(from: d, dateStyle: .none, timeStyle: .short)
+  if Calendar.current.isDateInToday(d) { return time }
+  let f = DateFormatter()
+  if d.timeIntervalSinceNow < 6 * 86400 {
+    f.setLocalizedDateFormatFromTemplate("EEE")
+    return f.string(from: d) + " " + time
+  }
+  f.setLocalizedDateFormatFromTemplate("ddMMM")
+  return f.string(from: d)
 }
 
 func formatAgo(_ ms: Double?) -> String {
@@ -306,8 +400,378 @@ struct Card: View {
   }
 }
 
+// ---- compact ---------------------------------------------------------------------
+// One card per provider; each account is a ring pair: outer arc = weekly (or the billing cycle), inner = 5 hours.
+
+struct Slots {
+  var short: UsageWindow?
+  var long: UsageWindow?
+}
+
+func slots(_ u: ProviderUsage) -> Slots {
+  let short = u.windows.first { $0.label.contains("Hour") }
+  var long = u.windows.first { $0.label.contains("Week") || $0.label.contains("7-Day Limit") }
+  if long == nil {
+    long = u.windows.first {
+      $0.label != short?.label && !$0.label.contains("Opus") && !$0.label.contains("Sonnet")
+    }
+  }
+  return Slots(short: short, long: long)
+}
+
+func slotName(_ w: UsageWindow?) -> String {
+  guard let l = w?.label else { return "" }
+  if l.contains("Hour") { return "5h" }
+  if l.contains("Week") || l.contains("7-Day") { return "wk" }
+  if l.contains("Month") || l.contains("Billing") { return "mo" }
+  return l
+}
+
+func shown(_ w: UsageWindow, _ display: String) -> Double { display == "used" ? w.usedPct : 100 - w.usedPct }
+
+/** "paulo" for paulo@example.com; without a known account, the profile folder (".claude-2") or nothing. */
+func shortAccount(_ u: ProviderUsage) -> String {
+  if let a = u.account, let local = a.split(separator: "@").first { return String(local) }
+  if let r = u.name.range(of: #"\((.+)\)$"#, options: .regularExpression) {
+    return String(u.name[r].dropFirst().dropLast())
+  }
+  return ""
+}
+
+/** Everything the ring leaves out: every limit with its reset, the plan and any error. */
+func tipText(_ u: ProviderUsage, _ display: String) -> String {
+  var lines = [(u.account ?? u.name) + (u.plan.map { "  -  " + $0.uppercased() } ?? "")]
+  for w in u.windows {
+    let reset = formatReset(w.resetsAt)
+    lines.append(
+      "\(w.label)   \(Int(shown(w, display).rounded()))% \(display == "used" ? "used" : "left")"
+        + (reset.isEmpty ? "" : "  -  resets \(reset)"))
+  }
+  for x in u.extras { lines.append("\(x.label)   \(x.value)") }
+  if let e = u.error { lines.append(e) }
+  return lines.joined(separator: "\n")
+}
+
+struct Ring: View {
+  let u: ProviderUsage
+  let display: String
+  var size: CGFloat = 56
+  // Arcs grow from zero when the ring first appears, then follow new values.
+  @StateObject private var appeared = LocalState(false)
+
+  var body: some View {
+    let s = slots(u)
+    let t: CGFloat = 5
+    let inner = size - 2 * (t + 3)
+    let main = s.short ?? s.long
+    ZStack {
+      Circle().stroke(C.track, lineWidth: t).frame(width: size - t, height: size - t)
+      if let long = s.long { arc(long, diameter: size - t, color: level(long.usedPct) ?? C.muted) }
+      if let short = s.short, s.long != nil {
+        Circle().stroke(C.track, lineWidth: t).frame(width: inner - t, height: inner - t)
+        arc(short, diameter: inner - t, color: level(short.usedPct) ?? C.text)
+      }
+      if let m = main {
+        let value = Int(shown(m, display).rounded())
+        // Three digits need a smaller size to stay inside the inner ring.
+        (Text("\(value)").font(.system(size: value >= 100 ? 11.5 : 13.5, weight: .semibold))
+          .foregroundColor(level(m.usedPct) ?? C.text)
+          + Text("%").font(.system(size: 9)).foregroundColor(C.muted))
+      } else {
+        Text("!").font(.system(size: 13.5, weight: .semibold)).foregroundColor(C.warn)
+      }
+    }
+    .frame(width: size, height: size)
+    .onAppear { withAnimation(.easeOut(duration: 0.55)) { appeared.value = true } }
+  }
+
+  func arc(_ w: UsageWindow, diameter: CGFloat, color: Color) -> some View {
+    let p = appeared.value ? CGFloat(max(0, min(100, shown(w, display))) / 100) : 0
+    return Circle()
+      .trim(from: 0, to: p)
+      .stroke(color, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+      .rotationEffect(.degrees(-90))
+      .frame(width: diameter, height: diameter)
+      // Under 1% a round-capped arc is just a dot, which reads as noise.
+      .opacity(p < 0.01 ? 0 : 1)
+      .animation(.easeOut(duration: 0.55), value: p)
+  }
+}
+
+/** Several accounts sit side by side: ring, short name and the weekly number under it. */
+struct AccountTile: View {
+  let u: ProviderUsage
+  let display: String
+  @StateObject private var hover = LocalState(false)
+
+  var body: some View {
+    let s = slots(u)
+    let sub: String = {
+      if let l = s.long, s.short != nil { return "\(slotName(l)) \(Int(shown(l, display).rounded()))%" }
+      return slotName(s.long ?? s.short)
+    }()
+    VStack(spacing: 0) {
+      Ring(u: u, display: display, size: 52)
+      let short = shortAccount(u)
+      if !short.isEmpty {
+        Text(short).font(.system(size: 11)).lineLimit(1).truncationMode(.tail).padding(.top, 6)
+      }
+      Text(sub).font(.system(size: 10)).foregroundColor(C.muted).padding(.top, short.isEmpty ? 6 : 0)
+    }
+    .frame(width: 59)
+    .padding(.vertical, 6)
+    .padding(.horizontal, 2)
+    .background(RoundedRectangle(cornerRadius: 8).fill(hover.value ? C.hover : Color.clear))
+    .onHover { hover.value = $0 }
+    .help(tipText(u, display))
+  }
+}
+
+/** A lone account gets its ring plus the numbers and reset times beside it. */
+struct AccountRow: View {
+  let u: ProviderUsage
+  let display: String
+  @StateObject private var hover = LocalState(false)
+
+  var body: some View {
+    let s = slots(u)
+    let ws = [s.short, s.long].compactMap { $0 }
+    HStack(spacing: 14) {
+      Ring(u: u, display: display)
+      VStack(alignment: .leading, spacing: 2) {
+        if let a = u.account {
+          Text(a).font(.system(size: 11.5)).foregroundColor(C.muted).lineLimit(1).truncationMode(.tail).padding(.bottom, 1)
+        }
+        ForEach(Array(ws.enumerated()), id: \.offset) { _, w in
+          HStack {
+            let reset = formatResetShort(w.resetsAt)
+            (Text(w.label).font(.system(size: 12.5))
+              + Text(reset.isEmpty ? "" : "  \(reset)").font(.system(size: 11)).foregroundColor(C.muted))
+              .lineLimit(1).truncationMode(.tail)
+            Spacer()
+            Text("\(Int(shown(w, display).rounded()))%").font(.system(size: 12.5, weight: .semibold))
+              .foregroundColor(level(w.usedPct) ?? C.text)
+          }
+        }
+        if ws.isEmpty, let e = u.error {
+          Text(e).font(.system(size: 11.5)).foregroundColor(C.muted).fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    }
+    .padding(6)
+    .background(RoundedRectangle(cornerRadius: 8).fill(hover.value ? C.hover : Color.clear))
+    .onHover { hover.value = $0 }
+    .help(tipText(u, display))
+    .padding(.horizontal, -6)
+    .padding(.top, 6)
+  }
+}
+
+struct ProviderGroup: Identifiable {
+  let id: String
+  let accounts: [ProviderUsage]
+}
+
+/** Accounts grouped by provider, keeping the order providers arrive in. */
+func groups(_ data: [ProviderUsage]) -> [ProviderGroup] {
+  var order: [String] = []
+  var byId: [String: [ProviderUsage]] = [:]
+  for u in data {
+    if byId[u.id] == nil { order.append(u.id) }
+    byId[u.id, default: []].append(u)
+  }
+  return order.map { ProviderGroup(id: $0, accounts: byId[$0] ?? []) }
+}
+
+struct CompactCard: View {
+  let g: ProviderGroup
+  let display: String
+
+  var body: some View {
+    let first = g.accounts[0]
+    let name = first.name.replacingOccurrences(of: " \\(.*\\)$", with: "", options: .regularExpression)
+    let rows = stride(from: 0, to: g.accounts.count, by: 4).map { Array(g.accounts[$0..<min($0 + 4, g.accounts.count)]) }
+    VStack(alignment: .leading, spacing: 0) {
+      HStack {
+        (Text("\(icons[g.id] ?? "")  ").foregroundColor(accents[g.id] ?? C.muted) + Text(name))
+          .font(.system(size: 13.5, weight: .semibold))
+        Spacer()
+        Text(g.accounts.count > 1 ? "\(g.accounts.count) accounts" : (first.plan?.uppercased() ?? ""))
+          .font(.system(size: 10.5, weight: .semibold)).foregroundColor(C.muted)
+      }
+      if g.accounts.count == 1 {
+        AccountRow(u: first, display: display)
+      } else {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            HStack(spacing: 0) {
+              ForEach(row, id: \.uid) { AccountTile(u: $0, display: display) }
+            }
+          }
+        }
+        .padding(.top, 6)
+        .padding(.horizontal, -4)
+      }
+    }
+    .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+    .background(RoundedRectangle(cornerRadius: 10).fill(C.card))
+    .overlay(RoundedRectangle(cornerRadius: 10).stroke(C.cardBorder, lineWidth: 1))
+  }
+}
+
+// ---- settings --------------------------------------------------------------------
+
+struct SegOption {
+  let value: String
+  let label: String
+}
+
+/** Pill-shaped choice, like the Windows settings: the picked option is filled. */
+struct Segmented: View {
+  let options: [SegOption]
+  let value: String
+  let pick: (String) -> Void
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ForEach(options, id: \.value) { o in
+        let on = o.value == value
+        Button {
+          pick(o.value)
+        } label: {
+          Text(o.label)
+            .font(.system(size: 12.5, weight: on ? .semibold : .regular))
+            .foregroundColor(on ? C.bg : C.muted)
+            .frame(minWidth: 62)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? C.text : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(3)
+    .background(RoundedRectangle(cornerRadius: 8).fill(C.card))
+    .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.cardBorder, lineWidth: 1))
+  }
+}
+
+struct DialogButton: View {
+  let title: String
+  var primary = false
+  var enabled = true
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 13, weight: primary ? .semibold : .regular))
+        .foregroundColor(primary ? C.bg : C.text)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 7).fill(primary ? C.text : C.card))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(primary ? C.text : C.cardBorder, lineWidth: 1))
+        .opacity(enabled ? 1 : 0.4)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
+  }
+}
+
+struct SettingsView: View {
+  @ObservedObject var m: Model
+  let close: () -> Void
+
+  var body: some View {
+    let u = m.update
+    let status: (String, Color) = {
+      if u.busy == "apply" { return ("Updating...", C.muted) }
+      if u.busy == "check" { return ("Checking for updates...", C.muted) }
+      if !u.error.isEmpty { return ("Can't update: \(u.error)", C.error) }
+      if u.behind > 0 { return ("Update available: \(u.behind) new change\(u.behind > 1 ? "s" : "")", C.warn) }
+      if u.checked { return ("Up to date", C.ok) }
+      return ("Not checked yet", C.muted)
+    }()
+    VStack(alignment: .leading, spacing: 0) {
+      HStack {
+        (Text("\u{2699}").foregroundColor(C.muted) + Text("  Settings")).font(.system(size: 14.5, weight: .semibold))
+        Spacer()
+        HeaderButton(title: "\u{2715}", help: "Close", action: close)
+      }
+      .padding(.bottom, 12)
+      .background(DragArea())
+      caption("DISPLAY")
+      option("Numbers", "Default for every limit") {
+        Segmented(
+          options: [SegOption(value: "used", label: "Used"), SegOption(value: "remaining", label: "Left")],
+          value: m.display, pick: { m.setDisplay($0) })
+      }
+      option("Layout", "Compact: rings per account") {
+        Segmented(
+          options: [SegOption(value: "normal", label: "Normal"), SegOption(value: "compact", label: "Compact")],
+          value: m.layout, pick: { m.setLayout($0) })
+      }
+      .padding(.top, 8)
+      Rectangle().fill(C.divider).frame(height: 1).padding(.top, 16).padding(.bottom, 14)
+      caption("ABOUT")
+      HStack(spacing: 12) {
+        Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 40, height: 40)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("OpenUsage").font(.system(size: 13.5, weight: .semibold))
+          Text(u.version.isEmpty ? "..." : "v\(u.version)" + (u.commit.isEmpty ? "" : " \u{00B7} \(u.commit)"))
+            .font(.system(size: 11.5, design: .monospaced)).foregroundColor(C.muted)
+        }
+      }
+      HStack(spacing: 9) {
+        Circle().fill(status.1).frame(width: 8, height: 8)
+        Text(status.0).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+      .background(RoundedRectangle(cornerRadius: 8).fill(C.card))
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(C.cardBorder, lineWidth: 1))
+      .padding(.top, 12)
+      HStack(spacing: 8) {
+        Spacer()
+        DialogButton(title: "Check for updates", enabled: u.busy.isEmpty) { m.runUpdate("check") }
+        if u.behind > 0 && u.error.isEmpty {
+          DialogButton(title: "Update now", primary: true, enabled: u.busy.isEmpty) { m.runUpdate("apply") }
+        }
+      }
+      .padding(.top, 14)
+    }
+    .font(.system(size: 13))
+    .foregroundColor(C.text)
+    .padding(EdgeInsets(top: 14, leading: 18, bottom: 16, trailing: 18))
+    .frame(width: 356)
+    .fixedSize(horizontal: false, vertical: true)
+    .background(RoundedRectangle(cornerRadius: 12).fill(C.bg))
+    .overlay(RoundedRectangle(cornerRadius: 12).stroke(C.border, lineWidth: 1))
+  }
+
+  func caption(_ s: String) -> some View {
+    Text(s).font(.system(size: 10.5, weight: .semibold)).foregroundColor(C.muted).padding(.bottom, 8)
+  }
+
+  func option<V: View>(_ title: String, _ note: String, @ViewBuilder control: () -> V) -> some View {
+    HStack {
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+        Text(note).font(.system(size: 11)).foregroundColor(C.muted)
+      }
+      Spacer()
+      control()
+    }
+  }
+}
+
 struct WidgetView: View {
   @ObservedObject var m: Model
+  let settings: () -> Void
+  let add: () -> Void
   let hide: () -> Void
   // Re-renders the "updated N min ago" label.
   @StateObject private var now = LocalState(Date())
@@ -318,6 +782,12 @@ struct WidgetView: View {
       HStack(spacing: 2) {
         (Text("\u{25F7}").foregroundColor(C.muted) + Text(" OpenUsage")).font(.system(size: 13, weight: .semibold))
         Spacer()
+        HeaderButton(title: "\u{2699}", help: "Settings", action: settings)
+          .overlay(alignment: .topTrailing) {
+            // A new version is waiting.
+            if m.update.behind > 0 { Circle().fill(C.warn).frame(width: 6, height: 6).offset(x: -2, y: 1) }
+          }
+        HeaderButton(title: "+", help: "Add account", action: add)
         HeaderButton(title: m.display == "used" ? "Used" : "Left", help: "Used / left") { m.toggleDisplay() }
         HeaderButton(title: "\u{27F3}", help: "Refresh") { m.refresh() }
         HeaderButton(title: "\u{2715}", help: "Hide (menu bar icon brings it back)", action: hide)
@@ -329,7 +799,11 @@ struct WidgetView: View {
         Text(m.refreshing ? "Loading..." : "No data").foregroundColor(C.muted)
       }
       VStack(spacing: 8) {
-        ForEach(m.data, id: \.id) { Card(u: $0, display: m.display) }
+        if m.layout == "compact" {
+          ForEach(groups(m.data)) { CompactCard(g: $0, display: m.display) }
+        } else {
+          ForEach(m.data, id: \.uid) { Card(u: $0, display: m.display) }
+        }
       }
       Rectangle().fill(C.divider).frame(height: 1).padding(.top, 10).padding(.bottom, 6)
       HStack {
@@ -392,6 +866,56 @@ func setStartAtLogin(_ on: Bool) {
   }
 }
 
+// ---- accounts ----------------------------------------------------------------------
+// Each extra account lives in its own config folder in home (".claude-2", ".codex-work"...), which the
+// providers find on their own. Adding one asks for a command name (e.g. "claude2") and opens Terminal on
+// scripts/add-account.ts, which creates the folder and a claude2 command for it, then signs in.
+
+struct AccountKind {
+  let id: String
+  let name: String
+  let prefix: String
+  let command: String
+}
+
+let accountKinds = [
+  AccountKind(id: "claude", name: "Claude", prefix: ".claude", command: "claude"),
+  AccountKind(id: "codex", name: "Codex", prefix: ".codex", command: "codex"),
+]
+
+let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+/** "claude2" -> ~/.claude-2, "claude-work" -> ~/.claude-work, "work" -> ~/.claude-work. */
+func accountDir(_ k: AccountKind, _ name: String) -> String? {
+  var suffix = Substring(name)
+  if name.lowercased().hasPrefix(k.command) { suffix = suffix.dropFirst(k.command.count) }
+  suffix = suffix.drop(while: { $0 == "-" || $0 == "_" })
+  return suffix.isEmpty ? nil : "\(home)/\(k.prefix)-\(suffix)"
+}
+
+/** Apps started from Finder get a bare PATH, so also look where installers usually put CLIs. */
+func commandExists(_ name: String) -> Bool {
+  let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+  let dirs = path + ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin"]
+  return dirs.contains { FileManager.default.isExecutableFile(atPath: "\($0)/\(name)") }
+}
+
+/** Why a command name can't be used, or nil when it can. */
+func accountNameProblem(_ k: AccountKind, _ name: String) -> String? {
+  if name.isEmpty { return "Type a name." }
+  if name.range(of: "^[A-Za-z0-9][A-Za-z0-9_-]*$", options: .regularExpression) == nil {
+    return "Use only letters, digits, - and _."
+  }
+  guard let dir = accountDir(k, name) else { return "Pick a name other than \(k.command)." }
+  if commandExists(name) { return "A command named \(name) already exists." }
+  if FileManager.default.fileExists(atPath: dir) {
+    return "The folder ~/\((dir as NSString).lastPathComponent) already exists."
+  }
+  return nil
+}
+
+func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
 // ---- app -------------------------------------------------------------------------
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -400,10 +924,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var status: NSStatusItem!
   var topItem: NSMenuItem!
   var loginItem: NSMenuItem!
+  var settingsPanel: Panel?
+  var settingsSink: AnyCancellable?
   var bag = Set<AnyCancellable>()
 
   func applicationDidFinishLaunching(_ note: Notification) {
-    let host = HostingView(rootView: WidgetView(m: model, hide: { [weak self] in self?.toggleWindow() }))
+    let host = HostingView(
+      rootView: WidgetView(
+        m: model, settings: { [weak self] in self?.showSettings() }, add: { [weak self] in self?.showAddMenu() },
+        hide: { [weak self] in self?.toggleWindow() }))
     host.frame.size = host.fittingSize
 
     panel = Panel(
@@ -455,8 +984,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self?.model.refresh()
     }
 
+    // Look for a new version at start and once a day; the gear gets a dot when there is one.
+    Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+      self?.model.runUpdate("check")
+    }
+
     panel.orderFrontRegardless()
     model.refresh()
+    model.runUpdate("check")
   }
 
   func setupStatusItem(topmost: Bool) {
@@ -473,6 +1008,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.delegate = self
     menu.addItem(withTitle: "Show / hide", action: #selector(toggleWindow), keyEquivalent: "").target = self
     menu.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
+    menu.addItem(withTitle: "Settings\u{2026}", action: #selector(showSettings), keyEquivalent: ",").target = self
+    for item in addItems() { menu.addItem(item) }
     menu.addItem(.separator())
     topItem = menu.addItem(withTitle: "Always on top", action: #selector(toggleTopmost), keyEquivalent: "")
     topItem.target = self
@@ -497,6 +1034,129 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @objc func refresh() { model.refresh() }
+
+  /** Settings open in a panel beside the widget, styled like it. */
+  @objc func showSettings() {
+    if let p = settingsPanel {
+      p.orderFrontRegardless()
+      return
+    }
+    let host = HostingView(rootView: SettingsView(m: model, close: { [weak self] in self?.closeSettings() }))
+    let size = host.fittingSize
+    host.frame.size = size
+    let p = Panel(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    p.contentView = host
+    p.isOpaque = false
+    p.backgroundColor = .clear
+    p.hasShadow = true
+    p.hidesOnDeactivate = false
+    p.level = .floating
+    let f = panel.frame
+    let area = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? f
+    let x = f.minX - size.width - 8 >= area.minX ? f.minX - size.width - 8 : f.maxX + 8
+    p.setFrameTopLeftPoint(NSPoint(x: x, y: f.maxY))
+    // The status line can wrap: keep the top edge and follow the content height.
+    settingsSink = model.objectWillChange.sink { [weak self] _ in
+      DispatchQueue.main.async {
+        guard let p = self?.settingsPanel else { return }
+        let s = host.fittingSize
+        p.setFrame(NSRect(x: p.frame.minX, y: p.frame.maxY - s.height, width: s.width, height: s.height), display: true)
+      }
+    }
+    settingsPanel = p
+    p.orderFrontRegardless()
+  }
+
+  func closeSettings() {
+    settingsPanel?.orderOut(nil)
+    settingsPanel = nil
+  }
+
+  func addItems() -> [NSMenuItem] {
+    accountKinds.map { k in
+      let item = NSMenuItem(title: "Add \(k.name) account\u{2026}", action: #selector(addAccount(_:)), keyEquivalent: "")
+      item.target = self
+      item.representedObject = k.id
+      return item
+    }
+  }
+
+  func showAddMenu() {
+    let menu = NSMenu()
+    for item in addItems() { menu.addItem(item) }
+    menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+  }
+
+  @objc func addAccount(_ sender: NSMenuItem) {
+    guard let k = accountKinds.first(where: { $0.id == sender.representedObject as? String }),
+      let root = resource("root")
+    else { return }
+    var n = 2
+    while accountNameProblem(k, "\(k.command)\(n)") != nil { n += 1 }
+    guard let name = askAccountName(k, suggested: "\(k.command)\(n)") else { return }
+
+    // Terminal runs the script through a .command file, which needs no Automation permission.
+    let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("openusage-add-\(UUID().uuidString)")
+    let done = base.appendingPathExtension("done")
+    let file = base.appendingPathExtension("command")
+    let node = resource("node").flatMap { FileManager.default.isExecutableFile(atPath: $0) ? shellQuote($0) : nil } ?? "node"
+    let lines = [
+      "#!/bin/zsh -l",
+      "cd \(shellQuote(root))",
+      "\(node) --experimental-strip-types --no-warnings scripts/add-account.ts \(k.id) \(shellQuote(name))",
+      "rc=$?",
+      "touch \(shellQuote(done.path))",
+      "[ $rc -ne 0 ] && read '?Press Enter to close'",
+      "exit $rc",
+    ]
+    do {
+      try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+    } catch {
+      model.lastError = "could not add account"
+      return
+    }
+    NSWorkspace.shared.open(file)
+
+    // When the terminal is done, fetch again so the new account shows up.
+    var waited = 0.0
+    Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] t in
+      waited += 3
+      if FileManager.default.fileExists(atPath: done.path) {
+        try? FileManager.default.removeItem(at: done)
+        try? FileManager.default.removeItem(at: file)
+        self?.model.refresh()
+        t.invalidate()
+      } else if waited > 30 * 60 {
+        t.invalidate()
+      }
+    }
+  }
+
+  /** Native prompt for the new account's command name; nil when cancelled. */
+  func askAccountName(_ k: AccountKind, suggested: String) -> String? {
+    let alert = NSAlert()
+    alert.messageText = "Add \(k.name) account"
+    alert.addButton(withTitle: "Sign in")
+    alert.addButton(withTitle: "Cancel")
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+    field.stringValue = suggested
+    field.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+    alert.accessoryView = field
+    alert.window.initialFirstResponder = field
+    NSApp.activate(ignoringOtherApps: true)
+    let intro = "Command that opens this account from any terminal."
+    var note = intro
+    while true {
+      alert.informativeText = note
+      guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+      let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+      guard let problem = accountNameProblem(k, name) else { return name }
+      note = "\(problem)\n\n\(intro)"
+    }
+  }
 
   @objc func toggleTopmost() {
     let on = panel.level != .floating
