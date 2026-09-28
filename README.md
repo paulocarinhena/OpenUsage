@@ -83,7 +83,10 @@ node -v
 
 Always use this folder. The "Start with Windows" option creates a shortcut pointing into it, so it must not be a temporary location.
 
+If the widget is already installed, this updates it. The first line closes a widget that is running: otherwise it keeps running the old version (only one instance runs at a time), and the ZIP path could not replace its folder.
+
 ```powershell
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*usage-widget.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 $dir = Join-Path $env:LOCALAPPDATA 'OpenUsage'
 if (Test-Path (Join-Path $dir '.git')) {
   git -C $dir pull --ff-only
@@ -120,7 +123,7 @@ This puts an **OpenUsage** icon on the desktop. Running it again just overwrites
 Start-Process wscript.exe -ArgumentList "`"$env:LOCALAPPDATA\OpenUsage\widget\usage-widget.vbs`""
 ```
 
-The widget opens without a console window. Only one instance runs at a time: if it is already open, this just brings it back into view.
+The widget opens without a console window. Only one instance runs at a time: if it is already open, this just brings it back into view (still on the version it started with), which is why Step 2 closes it first.
 
 #### Step 5 (optional): verify
 
@@ -141,6 +144,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -or [version]((node -v
   winget install --id OpenJS.NodeJS.LTS -e --accept-source-agreements --accept-package-agreements
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
 }
+# Close a running widget, so an update starts on the new version.
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*usage-widget.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 if (Test-Path (Join-Path $dir '.git')) { git -C $dir pull --ff-only } else { git clone https://github.com/paulocarinhena/OpenUsage.git $dir }
 $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'OpenUsage.lnk'))
 $lnk.TargetPath = Join-Path $env:WINDIR 'System32\wscript.exe'
