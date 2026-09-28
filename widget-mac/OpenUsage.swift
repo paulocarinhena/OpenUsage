@@ -687,7 +687,7 @@ struct SettingsView: View {
           options: [SegOption(value: "used", label: "Used"), SegOption(value: "remaining", label: "Left")],
           value: m.display, pick: { m.setDisplay($0) })
       }
-      option("Layout", "Compact: rings per account") {
+      option("Layout", "Compact: a line per account") {
         Segmented(
           options: [SegOption(value: "normal", label: "Normal"), SegOption(value: "compact", label: "Compact")],
           value: m.layout, pick: { m.setLayout($0) })

@@ -1,4 +1,4 @@
-<#
+﻿<#
   Floating Claude / Codex / Cursor usage widget.
   Plain PowerShell + WPF (built into Windows): nothing to download.
   Data comes from ..\scripts\usage-json.ts, run with Node (>= 22.6).
@@ -656,6 +656,27 @@ function New-DialogXaml([string]$title, [string]$heading, [string]$body, [int]$w
         </Setter.Value>
       </Setter>
     </Style>
+    <Style x:Key="CloseBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="$($C.Muted)"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="Transparent" CornerRadius="5" Padding="6,2">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="b" Property="Background" Value="$($C.Hover)"/>
+                <Setter Property="Foreground" Value="$($C.Text)"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource Btn}">
       <Setter Property="Background" Value="$($C.Text)"/>
       <Setter Property="Foreground" Value="$($C.Bg)"/>
@@ -702,7 +723,7 @@ function New-DialogXaml([string]$title, [string]$heading, [string]$body, [int]$w
     <Border.Effect><DropShadowEffect BlurRadius="20" ShadowDepth="3" Opacity="0.4"/></Border.Effect>
     <StackPanel>
       <DockPanel x:Name="Header" Background="Transparent" Margin="0,0,0,12">
-        <TextBlock DockPanel.Dock="Right" x:Name="CloseX" Text="&#x2715;" Foreground="$($C.Muted)" Cursor="Hand" Padding="4,0"/>
+        <Button DockPanel.Dock="Right" x:Name="CloseX" Style="{StaticResource CloseBtn}" ToolTip="Close">&#x2715;</Button>
         <TextBlock FontWeight="SemiBold" FontSize="14.5">$heading</TextBlock>
       </DockPanel>
       $body
@@ -721,9 +742,10 @@ function New-Dialog([string]$xaml, [string[]]$names) {
   $area = [System.Windows.SystemParameters]::WorkArea
   $dlg.Left = if ($win.IsVisible) { if ($win.Left - $w + 4 -ge $area.Left) { $win.Left - $w + 4 } else { $win.Left + $win.ActualWidth - 4 } } else { $area.Right - $w - 28 }
   $dlg.Top = if ($win.IsVisible) { $win.Top } else { $area.Top + 16 }
-  $d.Header.add_MouseLeftButtonDown({ $dlg.DragMove() })
-  $d.CloseX.add_MouseLeftButtonUp({ $dlg.DialogResult = $false })
-  $dlg.add_KeyDown({ param($s, $e) if ($e.Key -eq 'Escape') { $dlg.DialogResult = $false } })
+  # The close cross is a Button, which handles its own mouse-down, so the title drag never swallows the click.
+  $d.Header.add_MouseLeftButtonDown({ param($s) [System.Windows.Window]::GetWindow($s).DragMove() })
+  $d.CloseX.add_Click({ param($s) [System.Windows.Window]::GetWindow($s).DialogResult = $false })
+  $dlg.add_KeyDown({ param($s, $e) if ($e.Key -eq 'Escape') { $s.DialogResult = $false } })
   return $d
 }
 
@@ -893,7 +915,7 @@ function Show-Settings {
         </Border>
         <StackPanel VerticalAlignment="Center">
           <TextBlock Text="Layout"/>
-          <TextBlock Text="Compact: rings per account" Foreground="$($C.Muted)" FontSize="11"/>
+          <TextBlock Text="Compact: a line per account" Foreground="$($C.Muted)" FontSize="11"/>
         </StackPanel>
       </DockPanel>
       <Border Height="1" Background="$($C.Divider)" Margin="0,16,0,14"/>
