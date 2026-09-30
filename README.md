@@ -10,9 +10,11 @@ Claude · Codex · Cursor · OpenCode Go
 
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#windows)
 [![macOS](https://img.shields.io/badge/macOS-12%2B-000000?logo=apple&logoColor=white)](#macos)
+[![Linux](https://img.shields.io/badge/Linux-GTK%203-FCC624?logo=linux&logoColor=black)](#linux)
 [![Node](https://img.shields.io/badge/Node.js-%E2%89%A5%2022.6-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![PowerShell](https://img.shields.io/badge/UI-PowerShell%20%2B%20WPF-5391FE?logo=powershell&logoColor=white)](widget/usage-widget.ps1)
 [![Swift](https://img.shields.io/badge/UI-Swift%20%2B%20SwiftUI-F05138?logo=swift&logoColor=white)](widget-mac/OpenUsage.swift)
+[![Python](https://img.shields.io/badge/UI-Python%20%2B%20GTK-3776AB?logo=python&logoColor=white)](widget-linux/openusage.py)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-E8953F)](LICENSE)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/pcarinhena)
 
@@ -34,10 +36,10 @@ Claude · Codex · Cursor · OpenCode Go
 - **Used / Left:** show how much you have used or how much is left.
 - **Settings and updates:** the **⚙** button picks the layout and Used/Left, shows the version and updates the widget in one click.
 - **Plan and credits:** plan badge (PRO, PLUS, MAX…), credit balance, on-demand and bonus spend.
-- **Stays out of the way:** always-on-top, draggable, lives in the tray (Windows) or menu bar (macOS) and follows the system light/dark theme.
+- **Stays out of the way:** always-on-top, draggable, lives in the tray (Windows, Linux) or menu bar (macOS) and follows the system light/dark theme.
 - **Auto refresh** every 5 minutes. The last good numbers are cached, so they survive restarts and rate limits.
 - **Zero setup:** it reads the logins your tools already have. No API keys, no `npm install`.
-- **Windows and macOS.**
+- **Windows, macOS and Linux.**
 
 ### 🚀 Quick install
 
@@ -59,7 +61,7 @@ It will follow the [instructions below](#-instructions-for-ai-agents).
 
 > If someone asked you to "install", "download" or "open" this plugin/widget, follow the steps below exactly. **Do not ask the user questions:** every step has a default.
 
-> Check the operating system first: on **Windows** follow the steps right below; on **macOS** skip to [macOS](#macos).
+> Check the operating system first: on **Windows** follow the steps right below; on **macOS** skip to [macOS](#macos); on **Linux** skip to [Linux](#linux).
 
 ### Windows
 
@@ -195,6 +197,40 @@ node --experimental-strip-types --no-warnings scripts/probe.ts
 
 As on Windows, a provider with an `"error"` field only means the user does not use that tool or is not signed in.
 
+### Linux
+
+**Requirements:** a desktop session (X11, or Wayland with XWayland), Python 3 with the GTK 3 bindings, Node.js >= 22.6 and Git.
+
+#### Step 1: make sure the tools are there
+
+```bash
+python3 -c 'import gi; gi.require_version("Gtk", "3.0")' && node -v && git --version
+```
+
+If the GTK bindings are missing, install them: `sudo apt install python3-gi gir1.2-gtk-3.0` (Debian, Ubuntu, Mint, Zorin), `sudo dnf install python3-gobject gtk3` (Fedora) or `sudo pacman -S python-gobject gtk3` (Arch). Most GNOME, Cinnamon, MATE and Xfce desktops already have them. If `node` is missing or older than `v22.6.0`, install it from your package manager, [nodejs.org](https://nodejs.org) or nvm.
+
+#### Step 2: download (or update), install and open
+
+Always use `~/.local/share/OpenUsage`: the app menu entry points into it.
+
+```bash
+dir="$HOME/.local/share/OpenUsage"
+pkill -f 'widget-linux/openusage.py' || true   # an open widget keeps running the old version
+if [ -d "$dir/.git" ]; then git -C "$dir" pull --ff-only; else git clone https://github.com/paulocarinhena/OpenUsage.git "$dir"; fi
+"$dir/widget-linux/install.sh"
+```
+
+`install.sh` adds **OpenUsage** to the app menu (`~/.local/share/applications/openusage.desktop`), remembers where `node` is (so it also works with nvm) and opens the widget. Nothing is compiled.
+
+#### Step 3 (optional): verify
+
+```bash
+cd "$HOME/.local/share/OpenUsage"
+node --experimental-strip-types --no-warnings scripts/probe.ts
+```
+
+As on the other systems, a provider with an `"error"` field only means the user does not use that tool or is not signed in.
+
 ---
 
 ## 🖱️ Usage
@@ -207,7 +243,7 @@ As on Windows, a provider with an `"error"` field only means the user does not u
 | **+** | Adds another Claude or Codex account (see [Multiple accounts](#multiple-accounts)). |
 | **Used / Left** | Flips every number between used and left. |
 | **⟳** | Refreshes now (it also refreshes every 5 minutes). |
-| **✕** | Hides the widget; the tray / menu bar icon brings it back. |
+| **✕** | Hides the widget; the tray / menu bar icon brings it back. On Linux without a tray, it minimizes instead. |
 
 ### Reading the compact layout
 
@@ -256,6 +292,16 @@ Open **OpenUsage** from Spotlight, Launchpad or `~/Applications`.
 - **Drag the header** to move the widget; it remembers where you left it.
 - **Start at login:** adds a LaunchAgent (`~/Library/LaunchAgents/com.openusage.widget.plist`) that opens the app at login.
 
+### On Linux
+
+Open **OpenUsage** from the app menu, or run `python3 widget-linux/openusage.py`.
+
+- **Tray icon** (when the desktop has a tray): click to show or hide; right-click for the menu. On GNOME the tray needs the AppIndicator extension (Ubuntu and Zorin ship it) and, for the best icon, `gir1.2-ayatanaappindicator3-0.1`.
+- **Right-click the header:** Refresh, Settings…, Add account…, Always on top, Start at login and Quit. This works with or without a tray.
+- **Drag the header** to move the widget; it remembers where you left it.
+- **Start at login:** adds `~/.config/autostart/openusage.desktop`.
+- **Wayland:** the widget runs through XWayland, so it can stay on top and remember its place.
+
 To see the raw data in a terminal: `npm run probe` (or `npm run probe -- claude cursor` to pick providers). To check for or apply an update from a terminal: `node --experimental-strip-types scripts/update.ts check` (or `apply`), or just `git pull`.
 
 ## 🔌 Providers
@@ -266,15 +312,15 @@ The widget only **reads** credentials the tools themselves already saved on your
 |---|---|---|
 | Claude | `~/.claude/.credentials.json` (or `CLAUDE_CONFIG_DIR`); on macOS, the Keychain item Claude Code saves | Open Claude Code and sign in. Token expired: open Claude Code once to renew it. |
 | Codex | `~/.codex/auth.json` (or `CODEX_HOME`); offline, falls back to the latest session log | Sign in to Codex with your ChatGPT account. API-key logins have no plan limits. |
-| Cursor | `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, or `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS | Open Cursor and sign in. |
+| Cursor | `%APPDATA%\Cursor\User\globalStorage\state.vscdb`, `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` on macOS, or `~/.config/Cursor/User/globalStorage/state.vscdb` on Linux | Open Cursor and sign in. |
 | OpenCode Go | `OPENCODE_GO_API_KEY`, or the key saved by opencode's `/connect` | Run `/connect` in opencode and pick OpenCode Go. |
 
 ### Multiple accounts
 
 Claude Code and Codex keep one login per config folder, so each extra account gets its own folder in your home (`.claude-2`, `.codex-work`…) and a command that opens it, like `claude2`. The widget finds these folders and shows one card per account.
 
-- **Windows and macOS:** click **+** in the widget header (or **Add account** in the tray / menu bar menu), pick a command name and sign in with the other account in the terminal that opens.
-- **Linux, or any terminal:**
+- **In the widget (Windows, macOS, Linux):** click **+** in the widget header (or **Add account** in the tray / menu bar menu), pick a command name and sign in with the other account in the terminal that opens.
+- **Or from any terminal:**
 
   ```bash
   npm run add-account -- claude claude2   # then sign in and type /exit
@@ -297,6 +343,11 @@ Claude tokens are only renewed by Claude Code itself, so open `claude2` now and 
 1. In the menu bar icon, uncheck **Start at login**, then click **Quit**.
 2. Delete `~/Applications/OpenUsage.app`, `~/Library/Application Support/OpenUsage` and `~/Library/Application Support/usage-widget`.
 
+**Linux**
+
+1. Right-click the widget header and click **Quit**.
+2. Run `python3 ~/.local/share/OpenUsage/widget-linux/openusage.py --uninstall` (removes the app menu entry and the autostart entry), then delete `~/.local/share/OpenUsage` and `~/.config/usage-widget`.
+
 ## 🛠️ Development
 
 ```powershell
@@ -314,6 +365,7 @@ Layout:
 - `widget/usage-widget.ps1`: the WPF UI. The `.vbs` only launches it without a console.
 - `widget/openusage.ico`: the app icon, used by the tray and the shortcuts.
 - `widget-mac/OpenUsage.swift`: the macOS app (AppKit + SwiftUI). `widget-mac/build.sh` compiles it into `OpenUsage.app`.
+- `widget-linux/openusage.py`: the Linux app (Python + GTK 3). `widget-linux/install.sh` adds it to the app menu.
 
 ## ☕ Support
 

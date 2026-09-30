@@ -1,0 +1,23 @@
+name: Linux widget
+
+on:
+  push:
+    paths: ["widget-linux/**", ".github/workflows/linux.yml"]
+  pull_request:
+    paths: ["widget-linux/**", ".github/workflows/linux.yml"]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-3.0 xvfb
+      - run: bash -n widget-linux/install.sh
+      - run: python3 -m py_compile widget-linux/openusage.py
+      # Import the module under a virtual display: catches GTK API mistakes that only show at load time.
+      - run: xvfb-run -a /usr/bin/python3 -c "import importlib.util as u; s=u.spec_from_file_location('ou','widget-linux/openusage.py'); m=u.module_from_spec(s); s.loader.exec_module(m); print('ok')"
+      - run: |
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          /usr/bin/python3 widget-linux/openusage.py --install
+          grep -q '^Exec=.*openusage.py' "$HOME/.local/share/applications/openusage.desktop"
